@@ -12,10 +12,11 @@ const dosya = (camiler, surum = 1) => JSON.stringify({ surum, camiler });
 
 test('depodaki camiler.json geçerlidir ve referans camiyi içerir', () => {
   const liste = camilerOku(readFileSync(new URL('../../../camiler.json', import.meta.url), 'utf8'));
-  assert.equal(liste.length, 1);
-  assert.equal(liste[0].camiId, 'ulucamii-marche');
-  assert.equal(liste[0].ilce, '11890');
-  assert.equal(liste[0].slug, 'mfamenne');
+  // ikinci cami eklenince bozulmaz: uzunluk değil, referans caminin varlığı denetlenir
+  const referans = liste.find((c) => c.camiId === 'ulucamii-marche');
+  assert.ok(referans, 'referans cami ulucamii-marche camiler.json içinde olmalı');
+  assert.equal(referans.ilce, '11890');
+  assert.equal(referans.slug, 'mfamenne');
 });
 
 test('geçerli giriş okunur; cumaSaati dolu olabilir', () => {

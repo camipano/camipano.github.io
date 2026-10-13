@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { uret, calistir, IZINLI_KAYNAK_ALANLARI } from '../uret.mjs';
 
 const AYNA = readFileSync(new URL('./fikstur/ayna-11890.json', import.meta.url), 'utf8');
@@ -207,7 +209,7 @@ test('kaynak türü Diyanet değilse kapı reddeder: o cami hata, dosya yazılma
   } finally { rmSync(kok, { recursive: true, force: true }); }
 });
 
-test('bugünü içermeyen (bayat) veri doğrulamada reddedilir, eski dosya korunur', async (t) => {
+test('pencere tamamen geçmişte kaldıysa yetersiz gün sayısıyla reddedilir, dosya yazılmaz', async (t) => {
   sustur(t);
   const kok = kokKur([cami()]);
   try {
@@ -215,7 +217,101 @@ test('bugünü içermeyen (bayat) veri doğrulamada reddedilir, eski dosya korun
     const { sonuc, hataVar } = await uret({ kok, getir: sahteGetir(), bekle, simdi: () => new Date('2026-11-20T10:00:00Z') });
     assert.equal(hataVar, true);
     assert.equal(sonuc[0].durum, 'hata');
-    assert.match(sonuc[0].ileti, /yetersiz gün sayısı|bayat kaynak/); // pencere tamamen geçmişte kaldı
+    assert.equal(sonuc[0].ileti, 'yetersiz gün sayısı (0)'); // pencere tamamen geçmişte kaldı: dünden eski günler atılır
     assert.ok(!existsSync(join(kok, 'c')));
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+// ---- yardımcılar: sahte `cek` için sentetik günler
+const gunSentetik = (tarih, ek = {}) => ({ tarih, hicri: '2 Cemaziyelevvel 1448', imsak: '06:09', gunes: '07:50', ogle: '13:30', ikindi: '16:22', aksam: '19:00', yatsi: '20:28', ...ek });
+const gunDizisi = (bas, n) => Array.from({ length: n }, (_, i) => gunSentetik(new Date(Date.parse(bas + 'T12:00:00Z') + i * 864e5).toISOString().slice(0, 10)));
+const sahteCekOlustur = (gunler) => async () => ({ gunler, kaynakAdi: 'ayna', kaynakUc: 'https://ezanvakti.emushaf.net/vakitler/11890' });
+
+test('bugünü içermeyen ama yedi günü aşan veri bayat kaynak iletisiyle reddedilir', async (t) => {
+  sustur(t);
+  const kok = kokKur([cami()]);
+  try {
+    // dün + yarından sonraki 7 gün; bugün (13 Eki) yok
+    const gunler = [gunSentetik('2026-10-12'), ...gunDizisi('2026-10-14', 8)];
+    const { sonuc } = await uret({ kok, getir: sahteGetir(), bekle, simdi: SIMDI, cek: sahteCekOlustur(gunler) });
+    assert.equal(sonuc[0].durum, 'hata');
+    assert.equal(sonuc[0].ileti, 'bugün (2026-10-13) veride yok — bayat kaynak');
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('kapı çıktısı da doğrulanır: bugünden sonraki günlerden biri kapıda düşerse cami hata olur, eski dosya korunur', async (t) => {
+  sustur(t);
+  const kok = kokKur([cami()]);
+  try {
+    mkdirSync(join(kok, 'c', 'ornek-cami'), { recursive: true });
+    writeFileSync(dosyaYolu(kok, 'ornek-cami'), '{"eski":true}');
+    // hicri alanı yok: dogrula geçer, kapı (gunGecerliMi) düşürür → bugünden sonraki 2. gün eksik kalır
+    const gunler = gunDizisi('2026-10-12', 60);
+    gunler[3] = gunSentetik(gunler[3].tarih, { hicri: undefined });
+    const { sonuc, hataVar } = await uret({ kok, getir: sahteGetir(), bekle, simdi: SIMDI, cek: sahteCekOlustur(gunler) });
+    assert.equal(hataVar, true);
+    assert.equal(sonuc[0].durum, 'hata');
+    assert.equal(sonuc[0].ileti, 'bugünden sonraki 2. gün (2026-10-15) eksik');
+    assert.equal(readFileSync(dosyaYolu(kok, 'ornek-cami'), 'utf8'), '{"eski":true}');
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('yalnız ileri bir gün kapıda düşerse yayın sürer, ileti yayımlanmayan günü uyarı olarak yazar', async (t) => {
+  sustur(t);
+  const kok = kokKur([cami()]);
+  try {
+    const gunler = gunDizisi('2026-10-12', 80);
+    gunler[40] = gunSentetik(gunler[40].tarih, { hicri: undefined }); // 2026-11-21
+    const { sonuc, hataVar } = await uret({ kok, getir: sahteGetir(), bekle, simdi: SIMDI, cek: sahteCekOlustur(gunler) });
+    assert.equal(hataVar, false);
+    assert.equal(sonuc[0].durum, 'yazildi');
+    assert.match(sonuc[0].ileti, /UYARI: yayımlanmayan gün: 2026-11-21/);
+    assert.ok(!oku(kok, 'ornek-cami').gunler.some((g) => g.tarih === '2026-11-21'));
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('kesintisiz pencere 45 günden kısaysa uyarı yazılır; 45 ve üstünde yazılmaz', async (t) => {
+  sustur(t);
+  const kok = kokKur([cami({ camiId: 'kisa-cami' }), cami({ camiId: 'uzun-cami' })]);
+  try {
+    const kisa = await uret({ kok, getir: sahteGetir(), bekle, simdi: SIMDI }); // ayna fikstürü 8 Kas'a kadar: 26 gün
+    assert.match(kisa.sonuc[0].ileti, /UYARI: kesintisiz pencere yalnız 26 gün \(hedef 45\)/);
+    const kok2 = kokKur([cami({ camiId: 'uzun-cami' })]);
+    try {
+      const uzun = await uret({ kok: kok2, getir: sahteGetir(), bekle, simdi: SIMDI, cek: sahteCekOlustur(gunDizisi('2026-10-12', 60)) });
+      assert.equal(uzun.sonuc[0].durum, 'yazildi');
+      assert.doesNotMatch(uzun.sonuc[0].ileti, /UYARI/);
+    } finally { rmSync(kok2, { recursive: true, force: true }); }
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+// ---- ilçe adı kapısı uret üzerinden
+test('uret ilçe adını çekime iletir: başlık eşleşirse resmî sayfa yazılır, başka ilçe çıkarsa o cami hata verir ve dosyası yazılmaz', async (t) => {
+  sustur(t);
+  const GERCEK = readFileSync(new URL('./fikstur/resmi-11890-gercek.html', import.meta.url), 'utf8');
+  const getir = async (url) => (url.includes('namazvakitleri.diyanet.gov.tr') ? yanit(GERCEK) : yanit(AYNA));
+  const kok = kokKur([cami({ camiId: 'dogru-ilce' }), cami({ camiId: 'yanlis-ilce', ilceAdi: 'LIEGE' })]);
+  try {
+    const { sonuc, hataVar } = await uret({ kok, getir, bekle, simdi: SIMDI });
+    assert.equal(hataVar, true);
+    assert.equal(oku(kok, 'dogru-ilce').kaynakUc, 'https://namazvakitleri.diyanet.gov.tr/tr-TR/11890/mfamenne-namaz-vakitleri');
+    assert.equal(sonuc[1].durum, 'hata');
+    assert.match(sonuc[1].ileti, /başka ilçeye ait/);
+    assert.ok(!existsSync(join(kok, 'c', 'yanlis-ilce')));
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+// ---- CLI kapısı: betik gerçekten başlatılınca çalışır (VAKIT_KOK ile geçici kök)
+test('CLI: uret.mjs ve esdeger.mjs doğrudan çalıştırılınca koşar (bozuk camiler.json → 1 ve HATA; platform dosyası yok → atlandi, 0)', () => {
+  const kok = kokKur(null, '{bozuk');
+  try {
+    const env = { ...process.env, VAKIT_KOK: kok };
+    const u = spawnSync(process.execPath, [fileURLToPath(new URL('../uret.mjs', import.meta.url))], { env, encoding: 'utf8', timeout: 20000 });
+    assert.equal(u.status, 1, u.stderr);
+    assert.match(u.stderr, /HATA/);
+    assert.ok(!existsSync(join(kok, 'c')));
+    const e = spawnSync(process.execPath, [fileURLToPath(new URL('../esdeger.mjs', import.meta.url))], { env, encoding: 'utf8', timeout: 20000 });
+    assert.equal(e.status, 0, e.stderr);
+    assert.match(e.stdout, /durum: atlandi/);
   } finally { rmSync(kok, { recursive: true, force: true }); }
 });

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resmiAdres, aynaAdres, resmiSayfayiAyristir, aynaDonustur, cek } from '../diyanet.mjs';
+import { resmiAdres, aynaAdres, resmiSayfayiAyristir, resmiSayfaIlceAdi, ilceAdiNorm, aynaDonustur, cek } from '../diyanet.mjs';
 
 const fikstur = (ad) => readFileSync(new URL(`./fikstur/${ad}`, import.meta.url), 'utf8');
 const RESMI_HTML = fikstur('resmi-11890.html');
@@ -11,7 +11,7 @@ const AYNA_JSON = fikstur('ayna-11890.json');
 // console.warn gürültüsünü sustur
 const sustur = (t) => t.mock.method(console, 'warn', () => {});
 
-const yanit = (govde, durum = 200) => ({ ok: durum >= 200 && durum < 300, status: durum, text: async () => govde, json: async () => JSON.parse(govde) });
+const yanit = (govde, durum = 200, url) => ({ ok: durum >= 200 && durum < 300, status: durum, url, text: async () => govde, json: async () => JSON.parse(govde) });
 const resetHata = () => Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
 
 test('adresler ilçe ve slug ile kurulur', () => {
@@ -114,4 +114,88 @@ test('cek: kaynak adresi ilçe ve slug parametresinden gelir', async (t) => {
   await assert.rejects(cek({ ilce: '12345', slug: 'ornek' }, { getir, bekle: async () => {} }));
   assert.ok(istekler.includes('https://namazvakitleri.diyanet.gov.tr/tr-TR/12345/ornek-namaz-vakitleri'));
   assert.ok(istekler.includes('https://ezanvakti.emushaf.net/vakitler/12345'));
+});
+
+// ---- ilçe adı kapısı (resmî sayfa başlığı)
+const GERCEK_HTML = fikstur('resmi-11890-gercek.html');
+
+test('resmiSayfaIlceAdi: gerçek sayfa M.famenne verir; Aylık/Yıllık başlıkları da kabul edilir; ilk eşleşme kazanır', () => {
+  assert.equal(resmiSayfaIlceAdi(GERCEK_HTML), 'M.famenne');
+  assert.equal(resmiSayfaIlceAdi(RESMI_HTML), 'M.famenne');
+  assert.equal(resmiSayfaIlceAdi('<caption><h3 class="h4">Liège İçin Aylık Namaz Vakitleri</h3></caption>'), 'Liège');
+  assert.equal(resmiSayfaIlceAdi('<caption id="x"><h3>Namur İçin Yıllık Namaz Vakti</h3></caption>'), 'Namur');
+  assert.equal(resmiSayfaIlceAdi('<caption>A İçin Haftalık Namaz Vakitleri</caption><caption>B İçin Aylık Namaz Vakitleri</caption>'), 'A');
+  assert.equal(resmiSayfaIlceAdi('<html><body>başlık yok</body></html>'), null);
+  assert.equal(resmiSayfaIlceAdi('<caption>Başka bir tablo</caption>'), null);
+});
+
+test('ilceAdiNorm: büyük/küçük harf, aksan ve İ/ı farkı yok sayılır', () => {
+  assert.equal(ilceAdiNorm('M.famenne'), ilceAdiNorm('M.FAMENNE'));
+  assert.equal(ilceAdiNorm('Liège'), 'LIEGE');
+  assert.equal(ilceAdiNorm('İzmir'), 'IZMIR');
+  assert.equal(ilceAdiNorm(' Namur '), 'NAMUR');
+  assert.notEqual(ilceAdiNorm('Liege'), ilceAdiNorm('M.FAMENNE'));
+});
+
+test('cek: ilceAdi verilmişse gerçek resmî sayfa başlığı eşleşince resmî sayfa kullanılır', async (t) => {
+  sustur(t);
+  const getir = async (url) => (url.includes('namazvakitleri') ? yanit(GERCEK_HTML) : yanit(AYNA_JSON));
+  const s = await cek({ ilce: '11890', slug: 'mfamenne', ilceAdi: 'M.FAMENNE' }, { getir, bekle: async () => {} });
+  assert.equal(s.kaynakAdi, 'resmî sayfa');
+  assert.equal(s.gunler.length, 61);
+});
+
+test('cek: başlıktaki ilçe farklıysa hata (yeniden denenmez, aynaya da geçilmez: ayna aynı ilçe numarasını kullanır)', async (t) => {
+  sustur(t);
+  const yanlis = GERCEK_HTML.replace(/M\.famenne İçin Haftalık/, 'Liege İçin Haftalık');
+  assert.notEqual(yanlis, GERCEK_HTML);
+  const istekler = [];
+  const beklemeler = [];
+  const getir = async (url) => { istekler.push(url); return url.includes('namazvakitleri') ? yanit(yanlis) : yanit(AYNA_JSON); };
+  await assert.rejects(
+    cek({ ilce: '11890', slug: 'mfamenne', ilceAdi: 'M.FAMENNE' }, { getir, bekle: async (ms) => { beklemeler.push(ms); } }),
+    /başka ilçeye ait: "Liege"/,
+  );
+  assert.equal(istekler.filter((u) => u.includes('namazvakitleri')).length, 1);
+  assert.equal(istekler.filter((u) => u.includes('emushaf')).length, 0);
+  assert.deepEqual(beklemeler, []);
+});
+
+test('cek: başlıksız resmî sayfa ilceAdi verilmişse reddedilir; verilmemişse kabul edilir', async (t) => {
+  sustur(t);
+  const basliksiz = RESMI_HTML.replace(/<caption>.*<\/caption>\n/, '');
+  assert.ok(!basliksiz.includes('<caption>'));
+  const getir = async (url) => (url.includes('namazvakitleri') ? yanit(basliksiz) : yanit(AYNA_JSON));
+  const reddedildi = await cek({ ilce: '11890', slug: 'mfamenne', ilceAdi: 'M.FAMENNE' }, { getir, bekle: async () => {} });
+  assert.equal(reddedildi.kaynakAdi, 'ayna');
+  const kabul = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} });
+  assert.equal(kabul.kaynakAdi, 'resmî sayfa');
+});
+
+test('cek: ilçe adı kapısı aynaya uygulanmaz (ayna başlık taşımaz)', async (t) => {
+  sustur(t);
+  const getir = async (url) => { if (url.includes('namazvakitleri')) throw resetHata(); return yanit(AYNA_JSON); };
+  const s = await cek({ ilce: '11890', slug: 'mfamenne', ilceAdi: 'BASKA' }, { getir, bekle: async () => {} });
+  assert.equal(s.kaynakAdi, 'ayna');
+});
+
+// ---- yönlendirme denetimi
+test('cek: yanıtın son adresi izinli alan dışındaysa ya da https değilse başarısız sayılır', async (t) => {
+  sustur(t);
+  for (const sonAdres of ['https://evil.test/x', 'http://namazvakitleri.diyanet.gov.tr/x', 'https://namazvakitleri.diyanet.gov.tr.evil.test/x']) {
+    const getir = async (url) => (url.includes('namazvakitleri') ? yanit(RESMI_HTML, 200, sonAdres) : yanit(AYNA_JSON));
+    const s = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} });
+    assert.equal(s.kaynakAdi, 'ayna', sonAdres);
+  }
+  // ayna da yönlendirilirse ikisi de başarısız
+  const getir = async (url) => yanit(url.includes('namazvakitleri') ? RESMI_HTML : AYNA_JSON, 200, 'https://evil.test/y');
+  await assert.rejects(cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} }), /alınamadı/);
+});
+
+test('cek: son adres boşsa ya da izinli alandaysa kabul edilir', async (t) => {
+  sustur(t);
+  for (const sonAdres of [undefined, '', 'https://namazvakitleri.diyanet.gov.tr/tr-TR/11890/mfamenne-namaz-vakitleri']) {
+    const s = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir: async () => yanit(RESMI_HTML, 200, sonAdres), bekle: async () => {} });
+    assert.equal(s.kaynakAdi, 'resmî sayfa');
+  }
 });

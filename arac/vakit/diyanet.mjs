@@ -17,6 +17,36 @@ const bekleGercek = (ms) => new Promise((c) => setTimeout(c, ms));
 export const resmiAdres = (ilce, slug) => `https://namazvakitleri.diyanet.gov.tr/tr-TR/${ilce}/${slug}-namaz-vakitleri`;
 export const aynaAdres = (ilce) => `https://ezanvakti.emushaf.net/vakitler/${ilce}`;
 
+/** Yalnız bu iki alandan veri alınır; yönlendirme başka yere giderse yanıt reddedilir. */
+export const IZINLI_KAYNAK_ALANLARI = ['namazvakitleri.diyanet.gov.tr', 'ezanvakti.emushaf.net'];
+
+/** Yeniden denemenin anlamsız olduğu hata (yanlış ilçe, yabancı alana yönlendirme). */
+const tekrarsiz = (ileti) => Object.assign(new Error(ileti), { tekrarYok: true });
+
+/** Yanıtın son adresi (boş değilse) https + izinli alan olmalı. */
+function sonAdresiDenetle(r) {
+  if (!r.url) return;
+  let u;
+  try { u = new URL(r.url); } catch { throw tekrarsiz('yanıtın son adresi okunamadı: ' + r.url); }
+  if (u.protocol !== 'https:' || !IZINLI_KAYNAK_ALANLARI.includes(u.hostname)) throw tekrarsiz('yanıt izinli alan dışına yönlendirildi: ' + r.url);
+}
+
+/** İlçe adı karşılaştırması: aksan, büyük/küçük harf ve İ/ı farkı yok sayılır ("M.famenne" ≡ "M.FAMENNE"). */
+export const ilceAdiNorm = (s) => s.normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase().trim();
+
+/**
+ * Resmî sayfanın tablo başlığındaki ilçe adı: "<ad> İçin Haftalık Namaz Vakitleri" (Aylık/Yıllık da olur).
+ * İlk eşleşme kazanır; başlık yoksa null.
+ */
+export function resmiSayfaIlceAdi(html) {
+  for (const [, ic] of html.matchAll(/<caption[^>]*>([\s\S]*?)<\/caption>/g)) {
+    const metin = varlikCoz(ic.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+    const m = metin.match(/^(.+?) İçin (?:Haftalık|Aylık|Yıllık) Namaz Vak(?:it|ti)/);
+    if (m) return m[1].trim();
+  }
+  return null;
+}
+
 /** Ortak yeniden deneme sarmalayıcısı. */
 async function dene(ad, islev, araliklar, bekle) {
   let sonHata;
@@ -26,6 +56,7 @@ async function dene(ad, islev, araliklar, bekle) {
     } catch (e) {
       sonHata = e;
       console.warn(`${ad}: deneme ${i + 1}/${araliklar.length + 1} başarısız — ${e.message}`);
+      if (e.tekrarYok) break;
       if (i < araliklar.length) await bekle(araliklar[i]);
     }
   }
@@ -63,14 +94,23 @@ export function aynaDonustur(g) {
   };
 }
 
-async function resmiSayfadanCek(ilce, slug, getir, bekle) {
+async function resmiSayfadanCek(ilce, slug, ilceAdi, getir, bekle) {
   return dene('resmî sayfa', async () => {
     const r = await getir(resmiAdres(ilce, slug), {
       headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'tr-TR,tr;q=0.9' },
       signal: AbortSignal.timeout(30000),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    const gunler = resmiSayfayiAyristir(await r.text());
+    sonAdresiDenetle(r);
+    const html = await r.text();
+    if (ilceAdi) {
+      const bulunan = resmiSayfaIlceAdi(html);
+      if (bulunan === null) throw tekrarsiz(`sayfada ilçe başlığı yok (beklenen: "${ilceAdi}") — sayfa yapısı değişmiş olabilir`);
+      if (ilceAdiNorm(bulunan) !== ilceAdiNorm(ilceAdi)) {
+        throw Object.assign(tekrarsiz(`sayfa başka ilçeye ait: "${bulunan}" (beklenen: "${ilceAdi}")`), { ilceUyusmaz: true });
+      }
+    }
+    const gunler = resmiSayfayiAyristir(html);
     if (gunler.length < 7) throw new Error(`sayfa ayrıştırılamadı (${gunler.length} gün) — sayfa yapısı değişmiş olabilir`);
     return gunler;
   }, [10000, 30000], bekle);
@@ -83,6 +123,7 @@ async function aynadanCek(ilce, getir, bekle) {
       signal: AbortSignal.timeout(30000),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
+    sonAdresiDenetle(r);
     const ham = await r.json();
     if (!Array.isArray(ham) || ham.length < 7) throw new Error('beklenmeyen gövde');
     return ham.map(aynaDonustur).sort((a, b) => a.tarih.localeCompare(b.tarih));
@@ -90,13 +131,17 @@ async function aynadanCek(ilce, getir, bekle) {
 }
 
 /**
- * Önce resmî sayfa (en az 7 gün), olmazsa ayna. İkisi de başarısızsa hata fırlatır; hesapla onarım yoktur.
+ * Önce resmî sayfa (en az 7 gün), olmazsa ayna. `ilceAdi` verilmişse resmî sayfanın başlığındaki ilçe adı
+ * eşleşmek zorundadır (ayna başlık taşımadığı için ona uygulanmaz). Başlıkta başka ilçe çıkarsa aynaya da geçilmez:
+ * ayna aynı ilçe numarasını kullanır, o da başka ilçenin vakitlerini verir. İkisi de başarısızsa hata fırlatır;
+ * hesapla onarım yoktur.
  * @returns { gunler, kaynakAdi: 'resmî sayfa'|'ayna', kaynakUc }
  */
-export async function cek({ ilce, slug }, { getir = fetch, bekle = bekleGercek } = {}) {
+export async function cek({ ilce, slug, ilceAdi }, { getir = fetch, bekle = bekleGercek } = {}) {
   try {
-    return { gunler: await resmiSayfadanCek(ilce, slug, getir, bekle), kaynakAdi: 'resmî sayfa', kaynakUc: resmiAdres(ilce, slug) };
+    return { gunler: await resmiSayfadanCek(ilce, slug, ilceAdi, getir, bekle), kaynakAdi: 'resmî sayfa', kaynakUc: resmiAdres(ilce, slug) };
   } catch (e1) {
+    if (e1.ilceUyusmaz) throw new Error(`ilçe ${ilce} artık kayıttaki ilçeyi göstermiyor — ${e1.message}; camiler.json denetlenmeli`);
     console.warn('Resmî sayfa alınamadı: ' + e1.message + ' → ayna deneniyor');
     try {
       return { gunler: await aynadanCek(ilce, getir, bekle), kaynakAdi: 'ayna', kaynakUc: aynaAdres(ilce) };

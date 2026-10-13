@@ -16,6 +16,12 @@ test('bugunISO Brüksel tarihini verir (UTC gece yarısı sınırı)', () => {
   assert.equal(bugunISO(new Date('2026-12-31T23:30:00Z')), '2027-01-01');
 });
 
+test('bugunISO yaz saati bitişinde (25 Eki 2026) doğru tarihi verir', () => {
+  assert.equal(bugunISO(new Date('2026-10-24T22:30:00Z')), '2026-10-25'); // 00:30 CEST
+  assert.equal(bugunISO(new Date('2026-10-25T22:30:00Z')), '2026-10-25'); // 23:30 CET
+  assert.equal(bugunISO(new Date('2026-10-25T23:30:00Z')), '2026-10-26'); // 00:30 CET
+});
+
 test('dkOnce gün geriye/ileriye sayar', () => {
   assert.equal(dkOnce('2026-10-13', 1), '2026-10-12');
   assert.equal(dkOnce('2026-10-13', -3), '2026-10-16');
