@@ -1,0 +1,117 @@
+// diyanet.mjs testleri — ağsız: sahte `getir` ve anında dönen `bekle` ile.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resmiAdres, aynaAdres, resmiSayfayiAyristir, aynaDonustur, cek } from '../diyanet.mjs';
+
+const fikstur = (ad) => readFileSync(new URL(`./fikstur/${ad}`, import.meta.url), 'utf8');
+const RESMI_HTML = fikstur('resmi-11890.html');
+const AYNA_JSON = fikstur('ayna-11890.json');
+
+// console.warn gürültüsünü sustur
+const sustur = (t) => t.mock.method(console, 'warn', () => {});
+
+const yanit = (govde, durum = 200) => ({ ok: durum >= 200 && durum < 300, status: durum, text: async () => govde, json: async () => JSON.parse(govde) });
+const resetHata = () => Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+
+test('adresler ilçe ve slug ile kurulur', () => {
+  assert.equal(resmiAdres('11890', 'mfamenne'), 'https://namazvakitleri.diyanet.gov.tr/tr-TR/11890/mfamenne-namaz-vakitleri');
+  assert.equal(aynaAdres('11890'), 'https://ezanvakti.emushaf.net/vakitler/11890');
+});
+
+test('resmî sayfa fikstüründen 10 gün ayrıştırılır; bozuk ay satırı atlanır, &nbsp; çözülür', () => {
+  const g = resmiSayfayiAyristir(RESMI_HTML);
+  assert.equal(g.length, 10);
+  assert.deepEqual(g[0], { tarih: '2026-10-13', hicri: '2 Cemaziyelevvel 1448', imsak: '06:09', gunes: '07:50', ogle: '13:30', ikindi: '16:22', aksam: '19:00', yatsi: '20:28' });
+  // bozuk ay adlı satır (23 Ekimm) hiç yok; başlık (<th>) satırı da yok
+  assert.ok(!g.some((x) => x.tarih === '2026-10-23'));
+  // &nbsp; içeren satır doğru çözülür
+  assert.deepEqual(g[1], { tarih: '2026-10-14', hicri: '3 Cemaziyelevvel 1448', imsak: '06:11', gunes: '07:52', ogle: '13:30', ikindi: '16:20', aksam: '18:58', yatsi: '20:26' });
+  // tarihe göre sıralı
+  assert.deepEqual(g.map((x) => x.tarih), [...g.map((x) => x.tarih)].sort());
+  assert.equal(g.at(-1).tarih, '2026-10-22');
+});
+
+test('resmî sayfa ayrıştırıcısı varlıkları çözer ve tekrar eden tarihte sonuncuyu tutar', () => {
+  const html = '<tr><td>5&#32;Ocak 2027 Salı</td><td>1 Receb 1448</td><td>06:00</td><td>08:00</td><td>13:00</td><td>15:00</td><td>17:00</td><td>19:00</td></tr>'
+    + '<tr><td>5 Ocak 2027 Salı</td><td>1 Receb 1448</td><td>06:01</td><td>08:00</td><td>13:00</td><td>15:00</td><td>17:00</td><td>19:00</td></tr>';
+  const g = resmiSayfayiAyristir(html);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].tarih, '2027-01-05');
+  assert.equal(g[0].imsak, '06:01');
+});
+
+test('ayna fikstüründen en az 7 gün dönüşür; tarih biçimi YYYY-AA-GG', () => {
+  const g = JSON.parse(AYNA_JSON).map(aynaDonustur);
+  assert.ok(g.length >= 7);
+  for (const x of g) assert.match(x.tarih, /^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(g[0], { tarih: '2026-10-08', hicri: '27 Rebiulahir 1448', imsak: '06:01', gunes: '07:42', ogle: '13:31', ikindi: '16:30', aksam: '19:11', yatsi: '20:39' });
+});
+
+test('cek: resmî sayfa 200 ise resmî sayfa kullanılır', async (t) => {
+  sustur(t);
+  // 7 günden az ayrıştırılırsa resmî kabul edilmez; fikstürde 10 gün var
+  const istekler = [];
+  const getir = async (url) => { istekler.push(url); return yanit(RESMI_HTML); };
+  const s = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} });
+  assert.equal(s.kaynakAdi, 'resmî sayfa');
+  assert.equal(s.kaynakUc, 'https://namazvakitleri.diyanet.gov.tr/tr-TR/11890/mfamenne-namaz-vakitleri');
+  assert.equal(s.gunler.length, 10);
+  assert.deepEqual(istekler, [s.kaynakUc]);
+});
+
+test('cek: resmî 3 kez ECONNRESET verirse aynaya düşer', async (t) => {
+  sustur(t);
+  const istekler = [];
+  const beklemeler = [];
+  const getir = async (url) => {
+    istekler.push(url);
+    if (url.includes('namazvakitleri.diyanet.gov.tr')) throw resetHata();
+    return yanit(AYNA_JSON);
+  };
+  const s = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async (ms) => { beklemeler.push(ms); } });
+  assert.equal(s.kaynakAdi, 'ayna');
+  assert.equal(s.kaynakUc, 'https://ezanvakti.emushaf.net/vakitler/11890');
+  assert.equal(s.gunler.length, 32);
+  assert.equal(s.gunler[0].tarih, '2026-10-08');
+  assert.equal(istekler.filter((u) => u.includes('namazvakitleri')).length, 3);
+  assert.deepEqual(beklemeler, [10000, 30000]); // resmî aralıkları
+});
+
+test('cek: resmî sayfa 7 günden az ayrıştırılırsa ya da HTTP hatası verirse aynaya düşer', async (t) => {
+  sustur(t);
+  for (const resmiYanit of [yanit('<html>bos</html>'), yanit('', 403)]) {
+    const getir = async (url) => (url.includes('namazvakitleri') ? resmiYanit : yanit(AYNA_JSON));
+    const s = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} });
+    assert.equal(s.kaynakAdi, 'ayna');
+  }
+});
+
+test('cek: ayna beklenmeyen gövde verirse (dizi değil / 7 günden az) hata sayılır', async (t) => {
+  sustur(t);
+  const getir = async (url) => (url.includes('namazvakitleri') ? yanit('', 500) : yanit('{"hata":1}'));
+  await assert.rejects(cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} }), /alınamadı/);
+});
+
+test('cek: ikisi de başarısızsa hata iki kaynağı da adlandırır; ayna aralıkları 10 sn / 30 sn / 60 sn', async (t) => {
+  sustur(t);
+  const beklemeler = [];
+  const getir = async (url) => {
+    if (url.includes('namazvakitleri')) throw resetHata();
+    return yanit('', 403);
+  };
+  await assert.rejects(
+    cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async (ms) => { beklemeler.push(ms); } }),
+    (e) => /^Diyanet vakitleri hiçbir kaynaktan alınamadı — resmî: .*ECONNRESET.* · ayna: HTTP 403$/.test(e.message),
+  );
+  assert.deepEqual(beklemeler, [10000, 30000, 10000, 30000, 60000]);
+});
+
+test('cek: kaynak adresi ilçe ve slug parametresinden gelir', async (t) => {
+  sustur(t);
+  const istekler = [];
+  const getir = async (url) => { istekler.push(url); throw resetHata(); };
+  await assert.rejects(cek({ ilce: '12345', slug: 'ornek' }, { getir, bekle: async () => {} }));
+  assert.ok(istekler.includes('https://namazvakitleri.diyanet.gov.tr/tr-TR/12345/ornek-namaz-vakitleri'));
+  assert.ok(istekler.includes('https://ezanvakti.emushaf.net/vakitler/12345'));
+});
