@@ -9,9 +9,9 @@
 // Atlanma (atlandi, çıkış 0): canlıya ulaşılamaz/geçersiz gövde, canlı guncelleme 30 saatten eski, ortak gün < 3.
 //
 // CLI: node arac/vakit/esdeger.mjs   (çıkış: fark → 1; esit/atlandi → 0)
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SIRA } from './kapi.mjs';
 import { bugunISO } from './birlestir.mjs';
 
@@ -42,8 +42,10 @@ export function esdegerlik(platform, site, { bugun, simdi }) {
   if (Number.isNaN(guncelleme)) return atla('canlı akışın guncelleme alanı okunamadı');
   if (anOku(simdi).getTime() - guncelleme > BAYAT_MS) return atla('canlı akış 30 saatten eski (guncelleme ' + site.guncelleme + ')');
 
-  const pHarita = new Map(platform.gunler.map((g) => [g.tarih, g]));
-  const sHarita = new Map(site.gunler.map((g) => [g.tarih, g]));
+  // nesne olmayan girdiler (null, metin, sayı) yok sayılır
+  const nesneler = (liste) => liste.filter((g) => g && typeof g === 'object' && !Array.isArray(g));
+  const pHarita = new Map(nesneler(platform.gunler).map((g) => [g.tarih, g]));
+  const sHarita = new Map(nesneler(site.gunler).map((g) => [g.tarih, g]));
   const ortakTarihler = [...pHarita.keys()].filter((t) => typeof t === 'string' && t >= bugun && sHarita.has(t)).sort();
   if (ortakTarihler.length < EN_AZ_ORTAK) return atla(`ortak gün yetersiz (${ortakTarihler.length} < ${EN_AZ_ORTAK})`, ortakTarihler.length);
 
@@ -80,14 +82,17 @@ export async function esdeger({ kok, getir = fetch, simdi }) {
 }
 
 /** Çıkış kodunu döner: fark → 1, esit/atlandi → 0. */
-export async function calistir({ kok, getir, simdi, yaz = console.log, hataYaz = console.error }) {
+export async function calistir({ kok, getir, simdi, yaz = console.log, hataYaz = console.error, env = process.env }) {
   const r = await esdeger({ kok, getir, simdi });
   yaz(`durum: ${r.durum}, ortak gün: ${r.ortak}`);
   for (const f of r.farklar) hataYaz('FARK: ' + f);
   for (const u of r.uyarilar) yaz('uyarı: ' + u);
+  // GitHub Actions ek açıklaması: atlanma sessiz geçmesin (iş yine yeşil kalır)
+  if (r.durum === 'atlandi' && env.GITHUB_ACTIONS === 'true') yaz(`::warning::esdeger atlandi: ${r.uyarilar.join('; ')}`);
   return r.durum === 'fark' ? 1 : 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  process.exitCode = await calistir({ kok: fileURLToPath(new URL('../../', import.meta.url)) });
+if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
+  // kök: VAKIT_KOK (yalnız sınama için) ya da betik konumundan iki üst dizin
+  process.exitCode = await calistir({ kok: process.env.VAKIT_KOK || fileURLToPath(new URL('../../', import.meta.url)) });
 }

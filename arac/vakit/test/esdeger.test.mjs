@@ -189,3 +189,29 @@ test('calistir: fark → çıkış 1; esit ve atlandi → 0; çıktı durum ve o
     assert.equal(atlaKod, 0);
   } finally { rmSync(kok, { recursive: true, force: true }); }
 });
+
+test('esdegerlik: gunler içindeki nesne olmayan/null girdiler çökertmez, yok sayılır', () => {
+  const kirli = (liste) => [null, 'x', 5, undefined, ...liste, [], { tarihsiz: true }];
+  const r = esdegerlik(akis(kirli(gunler('2026-10-12', 20))), akis(kirli(gunler('2026-10-12', 20))), baglam);
+  assert.equal(r.durum, 'esit');
+  assert.equal(r.ortak, 19);
+  const site = gunler('2026-10-12', 20);
+  site[5] = gun(site[5].tarih, { ikindi: '16:23' });
+  assert.equal(esdegerlik(akis(kirli(gunler('2026-10-12', 20))), akis(kirli(site)), baglam).durum, 'fark');
+});
+
+test('calistir: atlandi ve GITHUB_ACTIONS=true ise ::warning:: ek açıklaması yazılır, çıkış 0 kalır', async () => {
+  const kok = kokKur(akis(gunler('2026-10-12', 20)));
+  try {
+    for (const [env, beklenen] of [[{ GITHUB_ACTIONS: 'true' }, true], [{}, false], [{ GITHUB_ACTIONS: 'false' }, false]]) {
+      const cikti = [];
+      const kod = await calistir({ kok, getir: async () => yanit('', 500), simdi: () => SIMDI, yaz: (s) => cikti.push(s), hataYaz: (s) => cikti.push(s), env });
+      assert.equal(kod, 0);
+      assert.equal(cikti.some((s) => s.startsWith('::warning::esdeger atlandi: canlı akışa ulaşılamadı: HTTP 500')), beklenen, JSON.stringify(env));
+    }
+    // esit durumunda ek açıklama yazılmaz
+    const cikti = [];
+    await calistir({ kok, getir: async () => yanit(JSON.stringify(akis(gunler('2026-10-12', 20)))), simdi: () => SIMDI, yaz: (s) => cikti.push(s), hataYaz: (s) => cikti.push(s), env: { GITHUB_ACTIONS: 'true' } });
+    assert.ok(!cikti.some((s) => s.startsWith('::warning::')));
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});

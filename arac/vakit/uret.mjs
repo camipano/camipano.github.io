@@ -4,15 +4,18 @@
 // HESAPLAMA TABANLI YEDEK KAYNAK YOKTUR: yalnız Diyanet'in resmî sayfası ve aynası.
 //
 // CLI: node arac/vakit/uret.mjs
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { camilerOku } from './camiler.mjs';
-import { cek as cekVarsayilan } from './diyanet.mjs';
-import { birlestir, dogrula, bugunISO } from './birlestir.mjs';
+import { cek as cekVarsayilan, IZINLI_KAYNAK_ALANLARI } from './diyanet.mjs';
+import { birlestir, dogrula, bugunISO, kalanGun } from './birlestir.mjs';
 import { ekranVakitleri } from './kapi.mjs';
 
-export const IZINLI_KAYNAK_ALANLARI = ['namazvakitleri.diyanet.gov.tr', 'ezanvakti.emushaf.net'];
+export { IZINLI_KAYNAK_ALANLARI };
+
+/** Sitenin erken uyarı eşiği (src/lib/icerik.ts hedefi): kesintisiz pencere bundan kısaysa uyarı yazılır. */
+const HEDEF_PENCERE = 45;
 
 /** Eldeki dosya: okunabiliyorsa ve Diyanet + aynı ilçe ise döner, değilse null (taban boş sayılır). */
 function eldekiOku(yol, ilce) {
@@ -49,7 +52,7 @@ export async function uret({ kok, getir, bekle, simdi = () => new Date(), cek = 
       const an = simdi();
       const bugun = bugunISO(an);
 
-      const taze = await cek({ ilce: cami.ilce, slug: cami.slug }, { getir, bekle });
+      const taze = await cek({ ilce: cami.ilce, slug: cami.slug, ilceAdi: cami.ilceAdi }, { getir, bekle });
       if (!kaynakIzinliMi(taze.kaynakUc)) throw new Error(`kaynak adresi izinli alanlarda değil: ${taze.kaynakUc}`);
 
       const { gunler, yeni, duzeltme } = birlestir(eldeki?.gunler ?? [], taze.gunler, bugun);
@@ -65,14 +68,21 @@ export async function uret({ kok, getir, bekle, simdi = () => new Date(), cek = 
         gunler,
       };
       const cikti = { ...ekranVakitleri(ham, bugun, cami.ilce), kaynakUc: taze.kaynakUc };
+      // Kapı çıktısı da sağlam olmalı: bugün + sonraki 7 gün kesintisiz kalmazsa yayımlanmaz (eski dosya korunur).
+      dogrula(cikti.gunler, bugun);
+      const uyarilar = [];
+      if (cikti.atlanan.length) uyarilar.push(`yayımlanmayan gün: ${cikti.atlanan.join(', ')}`);
+      const pencere = kalanGun(cikti.gunler, bugun);
+      if (pencere !== null && pencere < HEDEF_PENCERE) uyarilar.push(`kesintisiz pencere yalnız ${pencere} gün (hedef ${HEDEF_PENCERE})`);
+      const uyariMetni = uyarilar.map((u) => ` · UYARI: ${u}`).join('');
 
       if (eldeki && JSON.stringify(eldeki.gunler) === JSON.stringify(cikti.gunler)) {
-        sonuc.push({ camiId: cami.camiId, durum: 'degismedi', ileti: `${cikti.gunler.length} gün · kontrol kaynağı: ${taze.kaynakAdi}` });
+        sonuc.push({ camiId: cami.camiId, durum: 'degismedi', ileti: `${cikti.gunler.length} gün · kontrol kaynağı: ${taze.kaynakAdi}${uyariMetni}` });
         continue;
       }
       mkdirSync(join(kok, 'c', cami.camiId), { recursive: true });
       writeFileSync(yol, JSON.stringify(cikti));
-      sonuc.push({ camiId: cami.camiId, durum: 'yazildi', ileti: `${cikti.gunler.length} gün (${cikti.gunler[0].tarih} → ${cikti.gunler.at(-1).tarih}) · kaynak: ${taze.kaynakAdi} · yeni ${yeni}, düzeltme ${duzeltme}` });
+      sonuc.push({ camiId: cami.camiId, durum: 'yazildi', ileti: `${cikti.gunler.length} gün (${cikti.gunler[0].tarih} → ${cikti.gunler.at(-1).tarih}) · kaynak: ${taze.kaynakAdi} · yeni ${yeni}, düzeltme ${duzeltme}${uyariMetni}` });
     } catch (e) {
       sonuc.push({ camiId: cami.camiId, durum: 'hata', ileti: e.message });
     }
@@ -93,7 +103,7 @@ export async function calistir({ kok, getir, bekle, simdi, yaz = console.log, ha
   return r.hataVar ? 1 : 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  // kök: betik konumundan iki üst dizin (arac/vakit → depo kökü)
-  process.exitCode = await calistir({ kok: fileURLToPath(new URL('../../', import.meta.url)) });
+if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
+  // kök: VAKIT_KOK (yalnız sınama için) ya da betik konumundan iki üst dizin (arac/vakit → depo kökü)
+  process.exitCode = await calistir({ kok: process.env.VAKIT_KOK || fileURLToPath(new URL('../../', import.meta.url)) });
 }
