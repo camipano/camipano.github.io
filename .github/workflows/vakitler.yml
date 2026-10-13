@@ -1,0 +1,53 @@
+name: Vakitler (Diyanet, cami başına)
+on:
+  schedule:
+    - cron: "41 4 * * *"
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [camiler.json]
+permissions:
+  contents: write
+  pages: write
+concurrency:
+  group: vakitler
+  cancel-in-progress: false
+jobs:
+  vakitler:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node --test arac/vakit/test/*.test.mjs
+      - id: uret
+        run: node arac/vakit/uret.mjs
+        continue-on-error: true
+      - id: yayin
+        name: Değiştiyse yayınla
+        run: |
+          git config user.name "camipano-vakit"
+          git config user.email "camipano-vakit@users.noreply.github.com"
+          git add c/
+          if git diff --cached --quiet; then echo "itildi=0" >> "$GITHUB_OUTPUT"; echo "değişiklik yok"; exit 0; fi
+          git commit -m "Vakitler: Diyanet güncellemesi"
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push origin HEAD:main; then echo "itildi=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+            sleep $((i * 10))
+          done
+          exit 1
+      - name: Pages derlemesini iste (GITHUB_TOKEN commit'i klasik derlemeyi tetiklemez)
+        if: steps.yayin.outputs.itildi == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"
+      - name: Eşdeğerlik gözcüsü (Ulu Camii ↔ canlı site)
+        run: node arac/vakit/esdeger.mjs
+      - name: Başarısız cami varsa işi kırmızı bitir
+        if: steps.uret.outcome == 'failure'
+        run: exit 1

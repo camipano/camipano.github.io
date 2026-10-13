@@ -1,0 +1,127 @@
+// İş akışı tetikleyici kalkanı — bağımlılıksız metin ayrıştırma (YAML kütüphanesi yok).
+// Amaç: dal push'u, çekme isteği ve başka iş akışı tetikleyicileri hiçbir şey çalıştırmasın; yayın adımı yalnız c/'yi eklesin.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const YOL = new URL('../../../.github/workflows/vakitler.yml', import.meta.url);
+const metin = readFileSync(YOL, 'utf8').replace(/\r\n/g, '\n');
+const satirlar = metin.split('\n');
+
+/** Üst düzey anahtarın (girintisiz `ad:`) gövdesi: sonraki girintisiz satıra kadarki satırlar. */
+function ustBlok(ad) {
+  const bas = satirlar.findIndex((s) => s === `${ad}:` || s.startsWith(`${ad}: `));
+  assert.notEqual(bas, -1, `${ad}: bloğu yok`);
+  const govde = [];
+  for (let i = bas + 1; i < satirlar.length; i++) {
+    if (satirlar[i] !== '' && !/^\s/.test(satirlar[i])) break;
+    govde.push(satirlar[i]);
+  }
+  return govde;
+}
+/** Bir bloktaki belli girintili (kardeş) anahtarlar */
+const anahtarlar = (govde, girinti) =>
+  govde.filter((s) => s.startsWith(' '.repeat(girinti)) && !s.startsWith(' '.repeat(girinti + 1)) && /^\s*[\w-]+:/.test(s))
+    .map((s) => s.trim().match(/^([\w-]+):/)[1]);
+
+/** jobs.vakitler.steps: 6 boşluk girintili `- ` ile başlayan adım metinleri */
+function adimlar() {
+  const bas = satirlar.findIndex((s) => s === '    steps:');
+  assert.notEqual(bas, -1, 'steps: bloğu yok');
+  const sonuc = [];
+  for (let i = bas + 1; i < satirlar.length; i++) {
+    const s = satirlar[i];
+    if (s.startsWith('      - ')) sonuc.push([s]);
+    else if (sonuc.length) sonuc.at(-1).push(s);
+  }
+  return sonuc.map((l) => l.join('\n').trimEnd());
+}
+const adimBul = (ol) => {
+  const a = adimlar().filter(ol);
+  assert.equal(a.length, 1, 'adım tam bir kez bulunmalı');
+  return a[0];
+};
+
+test('on: yalnız schedule, workflow_dispatch ve push içerir', () => {
+  assert.deepEqual(anahtarlar(ustBlok('on'), 2), ['schedule', 'workflow_dispatch', 'push']);
+});
+
+test('push yalnız main dalı ve yalnız camiler.json değişimiyle çalışır', () => {
+  const on = ustBlok('on');
+  const bas = on.findIndex((s) => s === '  push:');
+  assert.notEqual(bas, -1);
+  const push = [];
+  for (let i = bas + 1; i < on.length && on[i].startsWith('    '); i++) push.push(on[i]);
+  assert.deepEqual(push.map((s) => s.trim()), ['branches: [main]', 'paths: [camiler.json]']);
+});
+
+test('pull_request ve workflow_run (ve pull_request_target) hiçbir yerde tetikleyici değildir', () => {
+  assert.doesNotMatch(metin, /^\s*(pull_request|pull_request_target|workflow_run)\s*:/m);
+  assert.doesNotMatch(ustBlok('on').join('\n'), /pull_request|workflow_run/);
+});
+
+test('schedule iki cron içerir', () => {
+  const on = ustBlok('on').join('\n');
+  assert.match(on, /- cron: "41 4 \* \* \*"/);
+  assert.match(on, /- cron: "17 13 \* \* \*"/);
+});
+
+test('permissions tam olarak contents: write ve pages: write', () => {
+  const izin = ustBlok('permissions').map((s) => s.trim()).filter(Boolean);
+  assert.deepEqual(izin, ['contents: write', 'pages: write']);
+});
+
+test('eşzamanlılık: vakitler grubu, çalışan koşu iptal edilmez', () => {
+  const c = ustBlok('concurrency').map((s) => s.trim()).filter(Boolean);
+  assert.deepEqual(c, ['group: vakitler', 'cancel-in-progress: false']);
+});
+
+test('Node 22 kurulur ve testler üret adımından önce koşar', () => {
+  assert.match(metin, /node-version: 22\b/);
+  const sirasi = adimlar();
+  const testIx = sirasi.findIndex((a) => a.includes('node --test arac/vakit/test/*.test.mjs'));
+  const uretIx = sirasi.findIndex((a) => a.includes('id: uret'));
+  assert.ok(testIx !== -1 && uretIx !== -1 && testIx < uretIx);
+});
+
+test('adım sırası: uret < yayın < pages/builds < esdeger', () => {
+  const a = adimlar();
+  const ix = (parca) => a.findIndex((x) => x.includes(parca));
+  const sira = [ix('id: uret'), ix('id: yayin'), ix('pages/builds'), ix('node arac/vakit/esdeger.mjs')];
+  assert.ok(sira.every((x) => x !== -1), 'adımlar bulunmalı: ' + sira.join(','));
+  assert.deepEqual(sira, [...sira].sort((x, y) => x - y));
+  assert.equal(new Set(sira).size, 4);
+});
+
+test('uret adımı continue-on-error: true ile koşar', () => {
+  const uret = adimBul((a) => a.includes('id: uret'));
+  assert.match(uret, /^\s*continue-on-error: true$/m);
+  assert.match(uret, /run: node arac\/vakit\/uret\.mjs$/m);
+});
+
+test('son adım uret başarısızsa işi kırmızı bitirir', () => {
+  const son = adimlar().at(-1);
+  assert.match(son, /if: steps\.uret\.outcome == 'failure'/);
+  assert.match(son, /run: exit 1$/m);
+});
+
+test('yayın adımı yalnız c/ ekler; camipano/ ya da git add . yok; rebase + 3 deneme', () => {
+  const yayin = adimBul((a) => a.includes('id: yayin'));
+  assert.match(yayin, /^\s*git add c\/$/m);
+  assert.doesNotMatch(yayin, /camipano\//);
+  assert.doesNotMatch(yayin, /git add (\.|-A|--all|-u)(\s|$)/);
+  assert.doesNotMatch(yayin, /git commit .*-a\b/);
+  assert.match(yayin, /git pull --rebase origin main/);
+  assert.match(yayin, /git push origin HEAD:main/);
+  assert.match(yayin, /for i in 1 2 3; do/);
+  assert.doesNotMatch(yayin, /--force|-f\b/);
+  // workflow genelinde de camipano/ klasörüne yazan komut yok
+  assert.doesNotMatch(metin, /git add [^\n]*camipano/);
+});
+
+test('Pages derlemesi yalnız itildiyse istenir ve GITHUB_TOKEN ile', () => {
+  const p = adimBul((a) => a.includes('pages/builds'));
+  assert.match(p, /if: steps\.yayin\.outputs\.itildi == '1'/);
+  assert.match(p, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(metin, /secrets\./);
+});
