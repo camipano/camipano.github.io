@@ -1,0 +1,16 @@
+{
+  "surum": 1,
+  "camiler": [
+    {
+      "camiId": "ulucamii-marche",
+      "adTr": "Marche-en-Famenne Ulu Camii",
+      "adFr": "Mosquée Ulu Camii de Marche-en-Famenne",
+      "ilce": "11890",
+      "ilceAdi": "M.FAMENNE",
+      "slug": "mfamenne",
+      "saatDilimi": "Europe/Brussels",
+      "konum": { "enlem": 50.231495, "boylam": 5.339165 },
+      "cumaSaati": ""
+    }
+  ]
+}
