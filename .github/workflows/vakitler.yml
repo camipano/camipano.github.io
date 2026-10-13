@@ -15,8 +15,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   vakitler:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,17 +28,19 @@ jobs:
       - run: node --test arac/vakit/test/*.test.mjs
       - id: uret
         run: node arac/vakit/uret.mjs
+        timeout-minutes: 15
         continue-on-error: true
       - id: yayin
         name: Değiştiyse yayınla
         run: |
           git config user.name "camipano-vakit"
           git config user.email "camipano-vakit@users.noreply.github.com"
-          git add c/
+          git add -A -- c/ 2>/dev/null || true
           if git diff --cached --quiet; then echo "itildi=0" >> "$GITHUB_OUTPUT"; echo "değişiklik yok"; exit 0; fi
           git commit -m "Vakitler: Diyanet güncellemesi"
           for i in 1 2 3; do
             if git pull --rebase origin main && git push origin HEAD:main; then echo "itildi=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+            git rebase --abort 2>/dev/null || true
             sleep $((i * 10))
           done
           exit 1
