@@ -107,13 +107,19 @@ test('son adım uret başarısızsa işi kırmızı bitirir', () => {
 
 test('yayın adımı yalnız c/ ekler; camipano/ ya da git add . yok; rebase + 3 deneme', () => {
   const yayin = adimBul((a) => a.includes('id: yayin'));
-  assert.match(yayin, /^\s*git add c\/$/m);
+  assert.match(yayin, /^\s*git add -A -- c\/ 2>\/dev\/null \|\| true$/m);
   assert.doesNotMatch(yayin, /camipano\//);
-  assert.doesNotMatch(yayin, /git add (\.|-A|--all|-u)(\s|$)/);
+  assert.doesNotMatch(yayin, /git add (?!-A -- c\/ )(\.|-A|--all|-u)(\s|$)/);
+  assert.equal((yayin.match(/git add /g) ?? []).length, 1, 'tek git add');
   assert.doesNotMatch(yayin, /git commit .*-a\b/);
   assert.match(yayin, /git pull --rebase origin main/);
   assert.match(yayin, /git push origin HEAD:main/);
   assert.match(yayin, /for i in 1 2 3; do/);
+  // başarısız deneme yarım kalmış rebase bırakmasın: döngü içinde, yeniden denemeden önce iptal edilir
+  const pull = yayin.indexOf('git pull --rebase');
+  const iptal = yayin.indexOf('git rebase --abort 2>/dev/null || true');
+  const uyku = yayin.indexOf('sleep $((i * 10))');
+  assert.ok(pull !== -1 && iptal > pull && uyku > iptal, 'pull < rebase --abort < sleep');
   assert.doesNotMatch(yayin, /--force|-f\b/);
   // workflow genelinde de camipano/ klasörüne yazan komut yok
   assert.doesNotMatch(metin, /git add [^\n]*camipano/);
@@ -124,4 +130,27 @@ test('Pages derlemesi yalnız itildiyse istenir ve GITHUB_TOKEN ile', () => {
   assert.match(p, /if: steps\.yayin\.outputs\.itildi == '1'/);
   assert.match(p, /GH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.doesNotMatch(metin, /secrets\./);
+});
+
+// jobs.vakitler'in adımlardan önceki satırları (runs-on, if, timeout-minutes …)
+function isUstSatirlari() {
+  const is = ustBlok('jobs');
+  const bas = is.findIndex((x) => x === '  vakitler:');
+  const steps = is.findIndex((x) => x === '    steps:');
+  assert.ok(bas !== -1 && steps > bas);
+  return is.slice(bas + 1, steps).map((x) => x.trim());
+}
+
+test('iş yalnız varsayılan dalda koşar (başka daldaki workflow_dispatch main\'e itmez)', () => {
+  const ust = isUstSatirlari();
+  assert.ok(ust.includes("if: github.ref == 'refs/heads/main'"), ust.join(' | '));
+});
+
+test('zaman aşımı: iş 25 dk, uret adımı 15 dk (continue-on-error korunur)', () => {
+  const ust = isUstSatirlari();
+  assert.ok(ust.includes('timeout-minutes: 25'), ust.join(' | '));
+  assert.ok(!ust.includes('timeout-minutes: 20'));
+  const uret = adimBul((a) => a.includes('id: uret'));
+  assert.match(uret, /^\s*timeout-minutes: 15$/m);
+  assert.match(uret, /^\s*continue-on-error: true$/m);
 });
