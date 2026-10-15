@@ -23,12 +23,25 @@ export const IZINLI_KAYNAK_ALANLARI = ['namazvakitleri.diyanet.gov.tr', 'ezanvak
 /** Yeniden denemenin anlamsız olduğu hata (yanlış ilçe, yabancı alana yönlendirme). */
 const tekrarsiz = (ileti) => Object.assign(new Error(ileti), { tekrarYok: true });
 
-/** Yanıtın son adresi (boş değilse) https + izinli alan olmalı. */
-function sonAdresiDenetle(r) {
+/** Yanıtın son adresi (boş değilse) https + izinli alan + istenen ilçe yolu olmalı. */
+function sonAdresiDenetle(r, beklenen = {}) {
   if (!r.url) return;
   let u;
   try { u = new URL(r.url); } catch { throw tekrarsiz('yanıtın son adresi okunamadı: ' + r.url); }
   if (u.protocol !== 'https:' || !IZINLI_KAYNAK_ALANLARI.includes(u.hostname)) throw tekrarsiz('yanıt izinli alan dışına yönlendirildi: ' + r.url);
+  const { ilce, slug } = beklenen;
+  if (!ilce) return;
+  if (u.hostname === 'ezanvakti.emushaf.net') {
+    // Ayna adresi aynaAdres(ilce) ile kurulur: /vakitler/<ilce>. Sondaki eğik çizgi hoş görülür.
+    const son = u.pathname.split('/').filter(Boolean).at(-1) ?? '';
+    if (son !== ilce) throw tekrarsiz(`yanıt başka ilçeye yönlendirildi (beklenen: "${ilce}", bulunan: "${son}"): ` + r.url);
+  } else if (u.hostname === 'namazvakitleri.diyanet.gov.tr') {
+    // Resmî adres resmiAdres(ilce, slug) ile kurulur: /tr-TR/<ilce>/<slug>-namaz-vakitleri. Sondaki eğik çizgi hoş görülür.
+    if (!slug) return;
+    const yol = u.pathname.replace(/\/+$/, '');
+    const beklenenParca = `/${ilce}/${slug}-namaz-vakitleri`;
+    if (!yol.endsWith(beklenenParca)) throw tekrarsiz(`yanıt başka ilçeye yönlendirildi (beklenen: "${beklenenParca}", bulunan: "${u.pathname}"): ` + r.url);
+  }
 }
 
 /** İlçe adı karşılaştırması: aksan, büyük/küçük harf ve İ/ı farkı yok sayılır ("M.famenne" ≡ "M.FAMENNE"). */
@@ -101,7 +114,7 @@ async function resmiSayfadanCek(ilce, slug, ilceAdi, getir, bekle) {
       signal: AbortSignal.timeout(30000),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    sonAdresiDenetle(r);
+    sonAdresiDenetle(r, { ilce, slug });
     const html = await r.text();
     if (ilceAdi) {
       const bulunan = resmiSayfaIlceAdi(html);
@@ -112,7 +125,8 @@ async function resmiSayfadanCek(ilce, slug, ilceAdi, getir, bekle) {
     }
     const gunler = resmiSayfayiAyristir(html);
     if (gunler.length < 7) throw new Error(`sayfa ayrıştırılamadı (${gunler.length} gün) — sayfa yapısı değişmiş olabilir`);
-    return gunler;
+    // kaynakUc, istenen değil gerçekten çekilen (son) adrestir; yönlendirme yoksa istenenle aynıdır.
+    return { gunler, sonAdres: r.url || resmiAdres(ilce, slug) };
   }, [10000, 30000], bekle);
 }
 
@@ -123,10 +137,12 @@ async function aynadanCek(ilce, getir, bekle) {
       signal: AbortSignal.timeout(30000),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    sonAdresiDenetle(r);
+    sonAdresiDenetle(r, { ilce });
     const ham = await r.json();
     if (!Array.isArray(ham) || ham.length < 7) throw new Error('beklenmeyen gövde');
-    return ham.map(aynaDonustur).sort((a, b) => a.tarih.localeCompare(b.tarih));
+    const gunler = ham.map(aynaDonustur).sort((a, b) => a.tarih.localeCompare(b.tarih));
+    // kaynakUc, istenen değil gerçekten çekilen (son) adrestir; yönlendirme yoksa istenenle aynıdır.
+    return { gunler, sonAdres: r.url || aynaAdres(ilce) };
   }, [10000, 30000, 60000], bekle);
 }
 
@@ -139,12 +155,14 @@ async function aynadanCek(ilce, getir, bekle) {
  */
 export async function cek({ ilce, slug, ilceAdi }, { getir = fetch, bekle = bekleGercek } = {}) {
   try {
-    return { gunler: await resmiSayfadanCek(ilce, slug, ilceAdi, getir, bekle), kaynakAdi: 'resmî sayfa', kaynakUc: resmiAdres(ilce, slug) };
+    const resmi = await resmiSayfadanCek(ilce, slug, ilceAdi, getir, bekle);
+    return { gunler: resmi.gunler, kaynakAdi: 'resmî sayfa', kaynakUc: resmi.sonAdres };
   } catch (e1) {
     if (e1.ilceUyusmaz) throw new Error(`ilçe ${ilce} artık kayıttaki ilçeyi göstermiyor — ${e1.message}; camiler.json denetlenmeli`);
     console.warn('Resmî sayfa alınamadı: ' + e1.message + ' → ayna deneniyor');
     try {
-      return { gunler: await aynadanCek(ilce, getir, bekle), kaynakAdi: 'ayna', kaynakUc: aynaAdres(ilce) };
+      const ayna = await aynadanCek(ilce, getir, bekle);
+      return { gunler: ayna.gunler, kaynakAdi: 'ayna', kaynakUc: ayna.sonAdres };
     } catch (e2) {
       throw new Error('Diyanet vakitleri hiçbir kaynaktan alınamadı — resmî: ' + e1.message + ' · ayna: ' + e2.message);
     }

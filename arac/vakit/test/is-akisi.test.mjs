@@ -76,8 +76,9 @@ test('eşzamanlılık: vakitler grubu, çalışan koşu iptal edilmez', () => {
   assert.deepEqual(c, ['group: vakitler', 'cancel-in-progress: false']);
 });
 
-test('Node 22 kurulur ve testler üret adımından önce koşar', () => {
-  assert.match(metin, /node-version: 22\b/);
+test('Node 24 kurulur ve testler üret adımından önce koşar', () => {
+  assert.match(metin, /node-version: 24\b/);
+  assert.doesNotMatch(metin, /node-version: 22\b/);
   const sirasi = adimlar();
   const testIx = sirasi.findIndex((a) => a.includes('node --test arac/vakit/test/*.test.mjs'));
   const uretIx = sirasi.findIndex((a) => a.includes('id: uret'));
@@ -105,12 +106,16 @@ test('son adım uret başarısızsa işi kırmızı bitirir', () => {
   assert.match(son, /run: exit 1$/m);
 });
 
-test('yayın adımı yalnız c/ ekler; camipano/ ya da git add . yok; rebase + 3 deneme', () => {
+test('yayın adımı yalnız başarılı camileri ekler (c/.basarili); liste boşsa yayımlamaz; rebase + 3 deneme', () => {
   const yayin = adimBul((a) => a.includes('id: yayin'));
-  assert.match(yayin, /^\s*git add -A -- c\/ 2>\/dev\/null \|\| true$/m);
+  // başarı listesi okunur; yoksa/boşsa yayımlanacak bir şey yoktur
+  assert.match(yayin, /c\/\.basarili/);
+  assert.match(yayin, /if \[ ! -s c\/\.basarili \].*itildi=0/s);
+  // yalnız listedeki kimliklerin dosyası eklenir; toplu `git add -A -- c/` yoktur
+  assert.match(yayin, /git add -- "c\/\$id\/vakitler\.json"/);
+  assert.doesNotMatch(yayin, /git add -A -- c\//);
   assert.doesNotMatch(yayin, /camipano\//);
-  assert.doesNotMatch(yayin, /git add (?!-A -- c\/ )(\.|-A|--all|-u)(\s|$)/);
-  assert.equal((yayin.match(/git add /g) ?? []).length, 1, 'tek git add');
+  assert.doesNotMatch(yayin, /git add (?! -- "c\/\$id\/vakitler\.json")(\.|-A|--all|-u)(\s|$)/);
   assert.doesNotMatch(yayin, /git commit .*-a\b/);
   assert.match(yayin, /git pull --rebase origin main/);
   assert.match(yayin, /git push origin HEAD:main/);
@@ -153,4 +158,16 @@ test('zaman aşımı: iş 25 dk, uret adımı 15 dk (continue-on-error korunur)'
   const uret = adimBul((a) => a.includes('id: uret'));
   assert.match(uret, /^\s*timeout-minutes: 15$/m);
   assert.match(uret, /^\s*continue-on-error: true$/m);
+});
+
+test('checkout ve setup-node tam SHA ile sabitlidir (sürüm yorumuyla), Node 24', () => {
+  assert.match(metin, /uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1/);
+  assert.match(metin, /uses: actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\.0\.0/);
+  assert.doesNotMatch(metin, /uses: actions\/checkout@v\d/);
+  assert.doesNotMatch(metin, /uses: actions\/setup-node@v\d/);
+});
+
+test('checkout dala sabitlenir (ayrık HEAD yerine main: commit adımı itebilir)', () => {
+  const adim = adimBul((a) => a.includes('actions/checkout@'));
+  assert.match(adim, /^\s*ref: main$/m);
 });

@@ -19,12 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           fetch-depth: 0
           filter: blob:none
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 24 }
       - run: node --test arac/vakit/test/*.test.mjs
       - id: uret
         run: node arac/vakit/uret.mjs
@@ -35,7 +36,12 @@ jobs:
         run: |
           git config user.name "camipano-vakit"
           git config user.email "camipano-vakit@users.noreply.github.com"
-          git add -A -- c/ 2>/dev/null || true
+          # Yalnız bu koşuda üretimi başarılı camiler eklenir (c/.basarili); liste yoksa/boşsa yayımlanacak bir şey yoktur.
+          if [ ! -s c/.basarili ]; then echo "itildi=0" >> "$GITHUB_OUTPUT"; echo "başarılı cami yok, yayımlanacak bir şey yok"; exit 0; fi
+          while IFS= read -r id || [ -n "$id" ]; do
+            [ -n "$id" ] || continue
+            git add -- "c/$id/vakitler.json" 2>/dev/null || true
+          done < c/.basarili
           if git diff --cached --quiet; then echo "itildi=0" >> "$GITHUB_OUTPUT"; echo "değişiklik yok"; exit 0; fi
           git commit -m "Vakitler: Diyanet güncellemesi"
           for i in 1 2 3; do
