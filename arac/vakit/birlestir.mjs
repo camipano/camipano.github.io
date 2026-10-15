@@ -40,7 +40,14 @@ export function dogrula(gunler, bugun) {
 export function birlestir(eldekiGunler, tazeGunler, bugun) {
   const dun = dkOnce(bugun, 1);
   const harita = new Map();
-  for (const g of eldekiGunler ?? []) if (g.tarih >= dun) harita.set(g.tarih, g);
+  // Eldeki dosyadaki bozuk satırlar (null, nesne dışı, tarihsiz) birleştirmeyi düşürmez:
+  // kapi.mjs:47 / esdeger.mjs:46 ile aynı elek, sayısı uyarıda raporlanır.
+  let atlanan = 0;
+  for (const g of eldekiGunler ?? []) {
+    if (!g || typeof g !== 'object' || Array.isArray(g) || typeof g.tarih !== 'string') { atlanan++; continue; }
+    if (g.tarih >= dun) harita.set(g.tarih, g);
+  }
+  if (atlanan > 0) console.warn(`Eldeki dosyada ${atlanan} geçersiz satır atlandı.`);
   let duzeltme = 0, yeni = 0;
   for (const g of tazeGunler) {
     if (g.tarih < dun) continue;

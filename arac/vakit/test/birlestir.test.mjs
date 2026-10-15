@@ -101,3 +101,15 @@ test('kalanGun: bugünden başlayan kesintisiz dizinin son gününe kadar gün s
   // bugün yoksa null
   assert.equal(kalanGun(gunler('2026-10-14', 10), BUGUN), null);
 });
+
+test('birlestir: eldeki dosyadaki bozuk satırlar (null, metin, tarihsiz) atlanır, sayısı uyarıda raporlanır', (t) => {
+  const uyari = t.mock.method(console, 'warn', () => {});
+  const saglam = gunler('2026-10-12', 10);
+  const eldeki = [null, 'x', 42, { hicri: 'yok' }, { tarih: 20261013 }, ...saglam];
+  const taze = gunler('2026-10-12', 10);
+  const s = birlestir(eldeki, taze, BUGUN);
+  assert.equal(s.gunler.length, 10);
+  assert.equal(s.gunler[0].tarih, '2026-10-12');
+  const rapor = uyari.mock.calls.map((c) => String(c.arguments[0])).join('\n');
+  assert.match(rapor, /5 geçersiz satır/);
+});

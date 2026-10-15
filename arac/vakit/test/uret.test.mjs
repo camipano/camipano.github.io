@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { uret, calistir, IZINLI_KAYNAK_ALANLARI } from '../uret.mjs';
+import { uret, calistir, IZINLI_KAYNAK_ALANLARI, BASARILI_DOSYA } from '../uret.mjs';
 
 const AYNA = readFileSync(new URL('./fikstur/ayna-11890.json', import.meta.url), 'utf8');
 const SIMDI = () => new Date('2026-10-13T10:00:00Z');
@@ -298,6 +298,72 @@ test('uret ilçe adını çekime iletir: başlık eşleşirse resmî sayfa yazı
     assert.equal(sonuc[1].durum, 'hata');
     assert.match(sonuc[1].ileti, /başka ilçeye ait/);
     assert.ok(!existsSync(join(kok, 'c', 'yanlis-ilce')));
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+// ---- F6: atomik yazım + başarı listesi
+test('başarısız cami geçici dosya bırakmaz ve başarı listesinde olmaz; başarılı cami listede olur', async (t) => {
+  sustur(t);
+  const kok = kokKur([
+    cami({ camiId: 'bozuk-cami', ilce: '22222', ilceAdi: 'BOZUK', slug: 'bozuk' }),
+    cami({ camiId: 'saglam-cami' }),
+  ]);
+  try {
+    const { sonuc, hataVar } = await uret({ kok, getir: sahteGetir(['22222']), bekle, simdi: SIMDI });
+    assert.equal(hataVar, true);
+    assert.equal(sonuc.find((s) => s.camiId === 'bozuk-cami').durum, 'hata');
+    assert.equal(sonuc.find((s) => s.camiId === 'saglam-cami').durum, 'yazildi');
+    // geçici dosya kalmaz
+    assert.ok(!existsSync(dosyaYolu(kok, 'bozuk-cami') + '.yeni'));
+    assert.ok(!existsSync(dosyaYolu(kok, 'saglam-cami') + '.yeni'));
+    assert.ok(!existsSync(join(kok, 'c', BASARILI_DOSYA + '.yeni')));
+    // başarı listesi yalnız sağlam camiyi taşır
+    const liste = readFileSync(join(kok, 'c', BASARILI_DOSYA), 'utf8').split('\n').filter(Boolean);
+    assert.deepEqual(liste, ['saglam-cami']);
+    assert.ok(!existsSync(dosyaYolu(kok, 'bozuk-cami')));
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('başarılı koşuda geçici dosya kalmaz ve başarı listesi bütün camileri taşır', async (t) => {
+  sustur(t);
+  const kok = kokKur([cami({ camiId: 'cami-bir' }), cami({ camiId: 'cami-iki' })]);
+  try {
+    const { hataVar } = await uret({ kok, getir: sahteGetir(), bekle, simdi: SIMDI });
+    assert.equal(hataVar, false);
+    for (const id of ['cami-bir', 'cami-iki']) assert.ok(!existsSync(dosyaYolu(kok, id) + '.yeni'));
+    const liste = readFileSync(join(kok, 'c', BASARILI_DOSYA), 'utf8').split('\n').filter(Boolean).sort();
+    assert.deepEqual(liste, ['cami-bir', 'cami-iki']);
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('atomik yazım: geçici dosya yazılamazsa cami hata olur, eski dosya aynen korunur', async (t) => {
+  sustur(t);
+  const kok = kokKur([cami({ camiId: 'ornek-cami' })]);
+  try {
+    const ilk = await uret({ kok, getir: sahteGetir(), bekle, simdi: SIMDI });
+    assert.equal(ilk.sonuc[0].durum, 'yazildi');
+    const once = readFileSync(dosyaYolu(kok, 'ornek-cami'), 'utf8');
+    // Geçici yazımı patlat: `.yeni` yolu dizin olsun, dosya yazımı hata versin.
+    mkdirSync(dosyaYolu(kok, 'ornek-cami') + '.yeni', { recursive: true });
+    const { sonuc, hataVar } = await uret({ kok, getir: sahteGetir(), bekle, simdi: () => new Date('2026-10-13T16:00:00Z'), cek: sahteCekOlustur(gunDizisi('2026-10-12', 60)) });
+    assert.equal(hataVar, true);
+    assert.equal(sonuc[0].durum, 'hata');
+    assert.equal(readFileSync(dosyaYolu(kok, 'ornek-cami'), 'utf8'), once);
+    assert.ok(!statSync(dosyaYolu(kok, 'ornek-cami') + '.yeni').isFile());
+    assert.ok(!existsSync(join(kok, 'c', BASARILI_DOSYA)));
+  } finally { rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('tam başarısız koşu eski başarı listesini siler', async (t) => {
+  sustur(t);
+  const kok = kokKur([cami({ ilce: '22222', slug: 'bozuk' })]);
+  try {
+    mkdirSync(join(kok, 'c'), { recursive: true });
+    writeFileSync(join(kok, 'c', BASARILI_DOSYA), 'eski-cami\n');
+    const { sonuc, hataVar } = await uret({ kok, getir: sahteGetir(['22222']), bekle, simdi: SIMDI });
+    assert.equal(hataVar, true);
+    assert.equal(sonuc[0].durum, 'hata');
+    assert.ok(!existsSync(join(kok, 'c', BASARILI_DOSYA)));
   } finally { rmSync(kok, { recursive: true, force: true }); }
 });
 

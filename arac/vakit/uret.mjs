@@ -4,7 +4,7 @@
 // HESAPLAMA TABANLI YEDEK KAYNAK YOKTUR: yalnız Diyanet'in resmî sayfası ve aynası.
 //
 // CLI: node arac/vakit/uret.mjs
-import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { camilerOku } from './camiler.mjs';
@@ -13,6 +13,10 @@ import { birlestir, dogrula, bugunISO, kalanGun } from './birlestir.mjs';
 import { ekranVakitleri } from './kapi.mjs';
 
 export { IZINLI_KAYNAK_ALANLARI };
+
+/** Bu koşuda üretimi başarılı camilerin kimlikleri (`durum !== 'hata'`). Yayın adımı yalnız bunları ekler. */
+export const BASARILI_DOSYA = '.basarili';
+const basariliYolu = (kok) => join(kok, 'c', BASARILI_DOSYA);
 
 /** Sitenin erken uyarı eşiği (src/lib/icerik.ts hedefi): kesintisiz pencere bundan kısaysa uyarı yazılır. */
 const HEDEF_PENCERE = 45;
@@ -81,11 +85,38 @@ export async function uret({ kok, getir, bekle, simdi = () => new Date(), cek = 
         continue;
       }
       mkdirSync(join(kok, 'c', cami.camiId), { recursive: true });
-      writeFileSync(yol, JSON.stringify(cikti));
+      // Atomik yazım: aynı dizinde geçici dosyaya yaz, hedef üzerine taşı. Yarıda kalan yazım yayımlanmaz.
+      const geciciYol = yol + '.yeni';
+      try {
+        writeFileSync(geciciYol, JSON.stringify(cikti));
+        renameSync(geciciYol, yol);
+      } catch (e) {
+        try { unlinkSync(geciciYol); } catch {}
+        throw e;
+      }
       sonuc.push({ camiId: cami.camiId, durum: 'yazildi', ileti: `${cikti.gunler.length} gün (${cikti.gunler[0].tarih} → ${cikti.gunler.at(-1).tarih}) · kaynak: ${taze.kaynakAdi} · yeni ${yeni}, düzeltme ${duzeltme}${uyariMetni}` });
     } catch (e) {
       sonuc.push({ camiId: cami.camiId, durum: 'hata', ileti: e.message });
     }
+  }
+  // Başarı listesi: yayın adımı yalnız bu kimliklerin `c/<id>/vakitler.json` dosyasını ekler.
+  // `c/.basarili` seçildi: aynı `kok` altında sınanabilir, yayın adımı tek dosyadan okur;
+  // asla `git add` ile evrelenmez. Başarı yoksa ve eski liste kalmışsa silinir;
+  // taze kökte başarı yoksa dosya oluşturulmaz (boş kök boş kalır).
+  const basarili = sonuc.filter((s) => s.durum !== 'hata').map((s) => s.camiId);
+  const listeYolu = basariliYolu(kok);
+  if (basarili.length > 0) {
+    const geciciListe = listeYolu + '.yeni';
+    try {
+      mkdirSync(join(kok, 'c'), { recursive: true });
+      writeFileSync(geciciListe, basarili.join('\n') + '\n');
+      renameSync(geciciListe, listeYolu);
+    } catch (e) {
+      try { unlinkSync(geciciListe); } catch {}
+      throw e;
+    }
+  } else if (existsSync(listeYolu)) {
+    unlinkSync(listeYolu);
   }
   return { sonuc, hataVar: sonuc.some((s) => s.durum === 'hata') };
 }

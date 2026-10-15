@@ -199,3 +199,51 @@ test('cek: son adres boşsa ya da izinli alandaysa kabul edilir', async (t) => {
     assert.equal(s.kaynakAdi, 'resmî sayfa');
   }
 });
+
+// ---- F1: son adresin yolu da istenen ilçeyi göstermeli
+test('cek: ayna başka ilçeye yönlenirse reddedilir (11890 istenirken /vakitler/9999)', async (t) => {
+  sustur(t);
+  const getir = async (url) => {
+    if (url.includes('namazvakitleri')) return yanit('', 500);
+    return yanit(AYNA_JSON, 200, 'https://ezanvakti.emushaf.net/vakitler/9999');
+  };
+  await assert.rejects(
+    cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} }),
+    (e) => /başka ilçeye yönlendirildi.*beklenen: "11890".*bulunan: "9999"/s.test(e.message),
+  );
+});
+
+test('cek: resmî sayfa başka ilçenin yoluna yönlenirse resmî sayfa sayılmaz (ayna kullanılır)', async (t) => {
+  sustur(t);
+  const getir = async (url) => {
+    if (url.includes('namazvakitleri')) return yanit(RESMI_HTML, 200, 'https://namazvakitleri.diyanet.gov.tr/tr-TR/9999/baska-namaz-vakitleri');
+    return yanit(AYNA_JSON, 200, 'https://ezanvakti.emushaf.net/vakitler/11890');
+  };
+  const s = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} });
+  assert.equal(s.kaynakAdi, 'ayna');
+});
+
+test('cek: resmî sayfada yalnız slug farklıysa da reddedilir', async (t) => {
+  sustur(t);
+  const getir = async (url) => {
+    if (url.includes('namazvakitleri')) return yanit(RESMI_HTML, 200, 'https://namazvakitleri.diyanet.gov.tr/tr-TR/11890/baska-namaz-vakitleri');
+    return yanit(AYNA_JSON, 200, 'https://ezanvakti.emushaf.net/vakitler/11890');
+  };
+  const s = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir, bekle: async () => {} });
+  assert.equal(s.kaynakAdi, 'ayna');
+});
+
+test('cek: aynı yolun sondaki eğik çizgili son adresi kabul edilir; kaynakUc son adrestir', async (t) => {
+  sustur(t);
+  const resmiSon = 'https://namazvakitleri.diyanet.gov.tr/tr-TR/11890/mfamenne-namaz-vakitleri/';
+  const r = await cek({ ilce: '11890', slug: 'mfamenne' }, { getir: async () => yanit(RESMI_HTML, 200, resmiSon), bekle: async () => {} });
+  assert.equal(r.kaynakAdi, 'resmî sayfa');
+  assert.equal(r.kaynakUc, resmiSon);
+  const aynaSon = 'https://ezanvakti.emushaf.net/vakitler/11890/';
+  const a = await cek(
+    { ilce: '11890', slug: 'mfamenne' },
+    { getir: async (url) => (url.includes('namazvakitleri') ? yanit('', 500) : yanit(AYNA_JSON, 200, aynaSon)), bekle: async () => {} },
+  );
+  assert.equal(a.kaynakAdi, 'ayna');
+  assert.equal(a.kaynakUc, aynaSon);
+});
