@@ -124,8 +124,7 @@ test('her uses: tam 40 haneli SHA ile sabitli (sürüm yorumuyla); checkout ve s
   assert.doesNotMatch(metin, /uses: [\w./-]+@v\d/);
 });
 
-// Yer tutucu SHA kalktığında `todo` işareti silinir: o andan sonra kalıcı bekçidir.
-test('upload-artifact ve download-artifact için gerçek SHA çözüldü (yer tutucu kalmadı)', { todo: 'Claude: gh api repos/actions/<ad>/git/ref/tags/<sürüm> ile çözer, sonra bu todo kalkar' }, () => {
+test('upload-artifact ve download-artifact için gerçek SHA çözüldü (yer tutucu kalmadı)', () => {
   assert.doesNotMatch(metin, /@0{40}\b/);
 });
 
