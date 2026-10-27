@@ -134,7 +134,17 @@ test('Pages derlemesi yalnız itildiyse istenir ve GITHUB_TOKEN ile', () => {
   const p = adimBul((a) => a.includes('pages/builds'));
   assert.match(p, /if: steps\.yayin\.outputs\.itildi == '1'/);
   assert.match(p, /GH_TOKEN: \$\{\{ github\.token \}\}/);
-  assert.doesNotMatch(metin, /secrets\./);
+  assert.doesNotMatch(p, /secrets\./);
+});
+
+test('sırlar yalnız uret adımında ve yalnız Awqat kimliği (test, yayın, esdeger adımları sır görmez)', () => {
+  const sirliAdimlar = adimlar().filter((a) => /secrets\./.test(a));
+  assert.equal(sirliAdimlar.length, 1);
+  assert.match(sirliAdimlar[0], /run: node arac\/vakit\/uret\.mjs$/m);
+  const adlar = [...metin.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1]).sort();
+  assert.deepEqual(adlar, ['AWQAT_KULLANICI', 'AWQAT_SIFRE']);
+  assert.match(sirliAdimlar[0], /AWQAT_ARALIK: \$\{\{ github\.event_name == 'workflow_dispatch' && '1' \|\| '' \}\}/);
+  assert.doesNotMatch(metin, /^\s{2,4}env:/m, 'iş ya da iş akışı düzeyinde env yok');
 });
 
 // jobs.vakitler'in adımlardan önceki satırları (runs-on, if, timeout-minutes …)

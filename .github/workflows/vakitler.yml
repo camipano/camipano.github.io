@@ -31,6 +31,12 @@ jobs:
         run: node arac/vakit/uret.mjs
         timeout-minutes: 15
         continue-on-error: true
+        env:
+          # Diyanet Awqat Salah API kimliği (birincil kaynak); yoksa resmî sayfa → ayna. Yalnız bu adım görür.
+          AWQAT_KULLANICI: ${{ secrets.AWQAT_KULLANICI }}
+          AWQAT_SIFRE: ${{ secrets.AWQAT_SIFRE }}
+          # Elle başlatılan koşu 90 günlük DateRange ister (ayda konum başına 10 istek sınırı; zamanlı koşuda yalnız pazartesi).
+          AWQAT_ARALIK: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
       - id: yayin
         name: Değiştiyse yayınla
         run: |
