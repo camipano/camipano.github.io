@@ -1,0 +1,109 @@
+name: Ekran sayfası (platform, cami başına)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [ekran-kaynak.json, camiler.json, "arac/ekran/**"]
+# Her iş kendi iznini bildirir: varsayılan yetki yok.
+permissions: {}
+concurrency:
+  group: ekran
+  cancel-in-progress: false
+jobs:
+  # SALT OKUMA: sitenin sabitlenmiş commit'i burada derlenir (npm ci bağımlılık betiklerini çalıştırır).
+  # Bu işte yazma belirteci ve sır yoktur; çıktı yalnız salt okunur bir paket olarak aktarılır.
+  derle:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      hazir: ${{ steps.kaynak.outputs.hazir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      # Sabitlenmemişse (sha boş) hazir=0: aşağıdaki adımlar atlanır, iş yeşil biter, yayinla koşmaz.
+      - id: kaynak
+        run: node arac/ekran/kaynak.mjs >> "$GITHUB_OUTPUT"
+      - if: steps.kaynak.outputs.hazir == '1'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.kaynak.outputs.repo }}
+          ref: ${{ steps.kaynak.outputs.sha }}
+          path: _site
+          persist-credentials: false
+      - if: steps.kaynak.outputs.hazir == '1'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 24 }
+      - if: steps.kaynak.outputs.hazir == '1'
+        name: Siteyi derle
+        working-directory: _site
+        timeout-minutes: 15
+        run: npm ci && npm run build
+      - if: steps.kaynak.outputs.hazir == '1'
+        uses: actions/upload-artifact@0000000000000000000000000000000000000000 # SHA-COZ: actions/upload-artifact (sürümü Claude seçer)
+        with:
+          name: ekran-paket
+          path: |
+            _site/dist/ekran/index.html
+            _site/dist/ekran/ekran.js
+            _site/dist/ekran/ekran.css
+            _site/dist/ekran/sw.js
+            _site/dist/ekran/akis.json
+            _site/dist/ekran/icerik.json
+            _site/dist/ekran/butce.json
+            _site/dist/ekran/fonts
+          if-no-files-found: error
+  # YAZMA YETKİLİ: npm ve site kodu YOK. Yalnız indirilmiş paketi yerleştirir ve doğrulanmış yolları ekler.
+  yayinla:
+    needs: derle
+    if: needs.derle.outputs.hazir == '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          filter: blob:none
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 24 }
+      - run: node --test arac/vakit/test/*.test.mjs arac/ekran/test/*.test.mjs
+      - uses: actions/download-artifact@0000000000000000000000000000000000000000 # SHA-COZ: actions/download-artifact (sürümü Claude seçer)
+        with:
+          name: ekran-paket
+          path: _paket
+      - id: yerlestir
+        run: node arac/ekran/yerlestir.mjs --paket _paket --kok .
+      - id: yayin
+        name: Değiştiyse yayınla
+        run: |
+          git config user.name "camipano-ekran"
+          git config user.email "camipano-ekran@users.noreply.github.com"
+          # Yerleştirmenin değiştirdiği yollar (yazılan + silinen); liste boşsa yayımlanacak bir şey yoktur.
+          if [ ! -s c/.ekran-yazilan ]; then echo "itildi=0" >> "$GITHUB_OUTPUT"; echo "değişiklik yok"; exit 0; fi
+          izinli='^(ekran/[A-Za-z0-9._/-]+|c/[a-z0-9][a-z0-9-]{2,39}/(index\.html|sw\.js|icerik\.json|akis\.json))$'
+          while IFS= read -r yol || [ -n "$yol" ]; do
+            [ -n "$yol" ] || continue
+            if [[ ! "$yol" =~ $izinli ]] || [[ "$yol" == *..* ]]; then echo "izin verilmeyen yol, yayın durdu: $yol"; exit 1; fi
+            git add -A -- "$yol"
+          done < c/.ekran-yazilan
+          if git diff --cached --quiet; then echo "itildi=0" >> "$GITHUB_OUTPUT"; echo "değişiklik yok"; exit 0; fi
+          git commit -m "Ekran: platform sayfaları"
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push origin HEAD:main; then echo "itildi=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 10))
+          done
+          exit 1
+      - name: Pages derlemesini iste (GITHUB_TOKEN commit'i klasik derlemeyi tetiklemez)
+        if: steps.yayin.outputs.itildi == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"
