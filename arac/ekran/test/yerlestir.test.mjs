@@ -149,6 +149,21 @@ test('sayfaUret: eksik cami alanları Error verir', () => {
   assert.throws(() => sayfaUret(s, cami({ konum: undefined })), /konum/);
 });
 
+/** #ekran-veri JSON'unu `f` ile dönüştürüp sayfaya geri yazar (test yardımcısı). */
+const veriDegistir = (html, f) =>
+  html.replace(/(<script\b[^>]*\bid="ekran-veri"[^>]*>)([\s\S]*?)(<\/script>)/, (_t, ac, g, kapa) => ac + JSON.stringify(f(JSON.parse(g))) + kapa);
+
+test('sayfaUret: şablonun #ekran-veri\'sinde bilinmeyen anahtar Error verir (yeni site alanı sessizce düşmez); bilinen anahtarlar geçer', () => {
+  const s = okuFikstur('index.html');
+  assert.throws(() => sayfaUret(veriDegistir(s, (v) => ({ ...v, yeniAlan: 1 })), cami()), /yeniAlan/);
+  assert.throws(() => sayfaUret(veriDegistir(s, (v) => ({ ...v, ilce: '11890', ekstra: [] })), cami()), /ekstra/);
+  // ilce şablonda varsa da yoksa da geçer; değer her zaman caminin kendisinden gelir
+  const ilceli = sayfaUret(veriDegistir(s, (v) => ({ ...v, ilce: '11890' })), cami());
+  assert.equal(veriOku(ilceli).ilce, '12345');
+  assert.ok(!('ilce' in veriOku(s)), 'gerçek fikstürde ilce yok (eski iskelet)');
+  assert.equal(veriOku(sayfaUret(s, cami())).ilce, '12345');
+});
+
 // ---------------------------------------------------------------- akisUret
 
 test('akisUret: sitenin duyuruları dolu olsa da çıktı boş (Ulu Camii duyurusu sızmaz); ayar siteden', () => {
@@ -439,6 +454,64 @@ test('yerlestir: paket dizini yoksa Error verir', async () => {
   await assert.rejects(yerlestir({ paket: join(kok, 'yok-boyle-dizin'), kok, camiler: [cami()] }), Error);
   assert.deepEqual(agac(kok), once);
 });
+
+// ---------------------------------------------------------------- şablon doğrulaması cami listesinden bağımsız
+
+const BOZUK_SABLONLAR = [
+  ['index.html başlığı yok', (p) => writeFileSync(join(p, 'index.html'), readFileSync(join(p, 'index.html'), 'utf8').replace(TITLE, () => ''))],
+  ['index.html noindex yok', (p) => writeFileSync(join(p, 'index.html'), readFileSync(join(p, 'index.html'), 'utf8').replace('noindex, nofollow', 'index, follow'))],
+  ['index.html ekran-veri bilinmeyen anahtar', (p) => writeFileSync(join(p, 'index.html'), veriDegistir(readFileSync(join(p, 'index.html'), 'utf8'), (v) => ({ ...v, yeniAlan: 1 })))],
+  ['akis.json ayar.slayt yok', (p) => writeFileSync(join(p, 'akis.json'), JSON.stringify({ derleme: 'x', ayar: {}, duyurular: [] }))],
+  ['akis.json duyurular dizi değil', (p) => writeFileSync(join(p, 'akis.json'), JSON.stringify({ derleme: 'x', ayar: { slayt: {} }, duyurular: 1 }))],
+  ['icerik.json ayetler dizi değil', (p) => writeFileSync(join(p, 'icerik.json'), JSON.stringify({ derleme: 'x', ayetler: {}, hadisler: [] }))],
+];
+const LISTELER = [['yalnız referans cami', () => [REFERANS]], ['boş cami listesi', () => []]];
+for (const [ad, boz] of BOZUK_SABLONLAR) {
+  for (const [listeAdi, liste] of LISTELER) {
+    test(`yerlestir: bozuk şablon (${ad}) + ${listeAdi} Error verir ve kök hiç değişmez (ortak ekran/ dosyaları da yazılmaz)`, async () => {
+      const paket = paketKopyala();
+      boz(paket);
+      const kok = kokKur(liste());
+      const once = agac(kok);
+      await assert.rejects(yerlestir({ paket, kok, camiler: camilerOku(readFileSync(join(kok, 'camiler.json'), 'utf8')) }), Error);
+      assert.deepEqual(agac(kok), once);
+      assert.ok(!existsSync(join(kok, 'ekran')));
+    });
+  }
+}
+
+test('yerlestir: geçerli şablon + yalnız referans cami → ortak ekran/ dosyaları yazılır, cami sayfası yazılmaz', async () => {
+  const paket = paketKopyala();
+  const kok = kokKur([REFERANS]);
+  const s = await yerlestir({ paket, kok, camiler: camilerOku(readFileSync(join(kok, 'camiler.json'), 'utf8')) });
+  assert.deepEqual(sirali(s.yazilan), sirali(MOTOR));
+  assert.deepEqual(s.atlanan, ['ulucamii-marche']);
+  assert.ok(!existsSync(join(kok, 'c', 'ulucamii-marche')));
+});
+
+// ---------------------------------------------------------------- hedef yol çatışmaları: ilk yazımdan önce dur
+
+const YOL_CATISMALARI = [
+  ['c/deneme-a/akis.json bir dizin', (k) => mkdirSync(join(k, 'c/deneme-a/akis.json'), { recursive: true }), /hedef yol bir dizin: c\/deneme-a\/akis\.json/],
+  ['c/deneme-b/index.html bir dizin', (k) => mkdirSync(join(k, 'c/deneme-b/index.html'), { recursive: true }), /hedef yol bir dizin: c\/deneme-b\/index\.html/],
+  ['ekran/ekran.js bir dizin', (k) => mkdirSync(join(k, 'ekran/ekran.js'), { recursive: true }), /hedef yol bir dizin: ekran\/ekran\.js/],
+  ['ekran/fonts/a.woff2 bir dizin', (k) => mkdirSync(join(k, 'ekran/fonts/a.woff2'), { recursive: true }), /hedef yol bir dizin: ekran\/fonts\/a\.woff2/],
+  ['c/.ekran-yazilan bir dizin', (k) => mkdirSync(join(k, 'c/.ekran-yazilan'), { recursive: true }), /hedef yol bir dizin: c\/\.ekran-yazilan/],
+  ['ekran bir dosya', (k) => writeFileSync(join(k, 'ekran'), 'x'), /üst dizini dosya: ekran\b/],
+  ['ekran/fonts bir dosya', (k) => { mkdirSync(join(k, 'ekran'), { recursive: true }); writeFileSync(join(k, 'ekran/fonts'), 'x'); }, /üst dizini dosya: ekran\/fonts/],
+  ['c/deneme-b bir dosya', (k) => writeFileSync(join(k, 'c/deneme-b'), 'x'), /üst dizini dosya: c\/deneme-b/],
+  ['c bir dosya', (k) => { rmSync(join(k, 'c'), { recursive: true }); writeFileSync(join(k, 'c'), 'x'); }, /üst dizini dosya: c\b/],
+];
+for (const [ad, hazirla, beklenen] of YOL_CATISMALARI) {
+  test(`yerlestir: ${ad} → Error verir, ilk yazımdan önce durur (kök hiç değişmez)`, async () => {
+    const paket = paketKopyala();
+    const kok = kokKur();
+    hazirla(kok);
+    const once = agac(kok);
+    await assert.rejects(yerlestir({ paket, kok, camiler: camilerOku(readFileSync(join(kok, 'camiler.json'), 'utf8')) }), beklenen);
+    assert.deepEqual(agac(kok), once);
+  });
+}
 
 // ---------------------------------------------------------------- CLI
 

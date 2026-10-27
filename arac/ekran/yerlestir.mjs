@@ -1,5 +1,6 @@
 // Platform ekran sayfası yerleştirme: sitenin derlediği ekran paketi → cami başına sayfa.
-// Akış: paket ve cami listesi doğrulanır, her şey bellekte üretilir, SONRA yazılır (bozuk girdide kök hiç değişmez).
+// Akış: paket, şablonlar (cami listesinden bağımsız) ve cami listesi doğrulanır, her şey bellekte üretilir, yol çatışmaları
+// denetlenir, SONRA yazılır (bozuk girdide kök hiç değişmez).
 // Yazdığı yerler yalnız: ekran/{ekran.js,ekran.css,butce.json,fonts/*} ve her (referans olmayan) cami için
 // c/<camiId>/{index.html,sw.js,icerik.json,akis.json}. Paketin vakitler.json'u KOPYALANMAZ (Ulu Camii'nindir).
 // Ulu Camii verisi cami sayfalarına sızmaz: duyurular boşaltılır, sayfa kimliği caminin kendisinden gelir.
@@ -21,6 +22,13 @@ const YER_TUTUCU = '@@EKRAN_SURUM@@';
 const SURUM = /^[0-9a-f]{16}$/;
 /** Yayın adımındaki yol süzgeciyle uyumlu: harf/rakam başlar, `..` içermez. */
 const FONT_ADI = /^[A-Za-z0-9](?!.*\.\.)[A-Za-z0-9._-]*$/;
+/** Şablonun #ekran-veri anahtarları: sayfa verisi bunlardan yeniden kurulur (ilce şablonda olmayabilir: eski iskelet). */
+const VERI_ANAHTARLARI = ['cami', 'vakit', 'gps', 'cumaSaati', 'ilce'];
+/** Şablon sınaması için uydurma geçerli cami: cami listesi boş ya da yalnız referans olsa da şablonlar doğrulanır. */
+const SINAMA_CAMISI = {
+  camiId: 'sinama-cami', adTr: 'Sınama Camii', adFr: 'Mosquée de sinama', ilce: '1', ilceAdi: 'SINAMA', slug: 'sinama',
+  saatDilimi: 'Europe/Brussels', konum: { enlem: 0, boylam: 0 }, cumaSaati: '',
+};
 
 const nesne = (x) => typeof x === 'object' && x !== null && !Array.isArray(x);
 
@@ -63,6 +71,10 @@ export function sayfaUret(indexHtml, cami) {
   isaretciDene(indexHtml, JS_BAGI, '/ekran/ekran.js bağlantısı');
   const sablon = jsonOku([...indexHtml.matchAll(VERI)][0][2], '#ekran-veri');
   if (!nesne(sablon) || !nesne(sablon.vakit)) throw new Error('#ekran-veri: vakit sözlüğü yok');
+  // Veri sıfırdan kurulur: tanınmayan şablon anahtarı sessizce düşmesin (sitenin yeni alanı fark edilsin).
+  for (const k of Object.keys(sablon)) {
+    if (!VERI_ANAHTARLARI.includes(k)) throw new Error(`#ekran-veri: tanınmayan anahtar "${k}" (sayfaya taşınmaz; önce yerlestir.mjs güncellenmeli)`);
+  }
 
   const veri = {
     cami: { tr: c.adTr, fr: c.adFr.trim() === '' ? c.adTr : c.adFr },
@@ -174,6 +186,21 @@ function paketOku(paket) {
 const yolu = (kok, goreli) => join(kok, ...goreli.split('/'));
 const sirali = (d) => [...d].sort();
 
+/** Yazımdan önce yol çatışması denetimi: hedef var olan bir dizin olmamalı, üst yollarından hiçbiri dosya olmamalı
+ *  (yoksa yazım yarıda kalır). `yol`: kök'e göre `/` ayraçlı yol. */
+function yolCatismasiDene(kok, yol) {
+  const parcalar = yol.split('/');
+  let ust = '';
+  for (const parca of parcalar.slice(0, -1)) {
+    ust = ust === '' ? parca : `${ust}/${parca}`;
+    const y = yolu(kok, ust);
+    if (!existsSync(y)) break; // üstü olmayanın altı da yoktur
+    if (!statSync(y).isDirectory()) throw new Error(`hedef yolun üst dizini dosya: ${ust} (${yol})`);
+  }
+  const y = yolu(kok, yol);
+  if (existsSync(y) && statSync(y).isDirectory()) throw new Error(`hedef yol bir dizin: ${yol}`);
+}
+
 /** Paketi `kok` altına yerleştirir. Önce her şey doğrulanıp bellekte üretilir; hata olursa hiçbir şey yazılmaz.
  *  Dönüş: `yazilan` (değişen yollar), `silinen` (paketle gelmeyen eski yazı tipleri), `atlanan` (referans cami kimlikleri). */
 export async function yerlestir({ paket, kok, camiler }) {
@@ -181,6 +208,11 @@ export async function yerlestir({ paket, kok, camiler }) {
   if (typeof kok !== 'string' || !existsSync(kok) || !statSync(kok).isDirectory()) throw new Error('kök dizini yok');
   const p = paketOku(paket);
   swUret(p.sw, '0'.repeat(16)); // şablonu baştan sına: yer tutucu tam bir kez
+  // Şablonlar cami listesinden bağımsız sınanır: liste boş ya da yalnız referans cami olsa da ortak ekran/ dosyaları
+  // yazılacağı için bozuk paket yazıma varmamalı.
+  sayfaUret(p.index, SINAMA_CAMISI);
+  akisUret(p.akis, null);
+  icerikUret(p.icerik, null);
 
   /** hedef yol → bayt (yalnız izin verilen yerler) */
   const hedefler = new Map([
@@ -226,6 +258,10 @@ export async function yerlestir({ paket, kok, camiler }) {
       if (e.isFile() && FONT_ADI.test(e.name) && !hedefler.has(yol)) silinecek.push(yol);
     }
   }
+
+  // Yol çatışmaları (dizin üstüne dosya, dosya altına dizin) ilk yazımdan ÖNCE yakalanır; yarım yazım kalmaz.
+  for (const [yol] of yazilacak) yolCatismasiDene(kok, yol);
+  yolCatismasiDene(kok, `c/${YAZILAN_DOSYA}`);
 
   // Doğrulama bitti: yazım.
   for (const [, y, bayt] of yazilacak) {

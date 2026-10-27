@@ -1,11 +1,19 @@
 // ekran.yml tetikleyici ve yetki kalkanı — bağımlılıksız metin ayrıştırma (YAML kütüphanesi yok).
 // Amaç: dal push'u, çekme isteği ve başka iş akışı hiçbir şey çalıştırmasın; npm ci / site betikleri yalnız
 // SALT OKUMA işinde (derle) koşsun; yazma yetkili iş (yayinla) yalnız indirilmiş paketi yerleştirip c/ ve ekran/ yollarını eklesin.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { REFERANS_CAMILER, yerlestir } from '../yerlestir.mjs';
+import { camilerOku } from '../../vakit/camiler.mjs';
 
 const YOL = new URL('../../../.github/workflows/ekran.yml', import.meta.url);
+const KAYNAK_MJS = fileURLToPath(new URL('../kaynak.mjs', import.meta.url));
+const FIKSTUR = fileURLToPath(new URL('./fikstur/dist-ekran/', import.meta.url));
 const metin = readFileSync(YOL, 'utf8').replace(/\r\n/g, '\n');
 const satirlar = metin.split('\n');
 const yorumsuz = (ls) => ls.filter((s) => !s.trim().startsWith('#'));
@@ -89,15 +97,16 @@ test('üst düzey permissions boş (her iş kendi iznini bildirir)', () => {
 
 test('derle yalnız contents: read; write hiçbir yerinde yok. yayinla contents: write ve pages: write', () => {
   assert.deepEqual(izinler('derle'), ['contents: read']);
-  assert.doesNotMatch(isBlok('derle').join('\n'), /write/);
+  // `\bwrite\b`: yazma izni sözcüğü (write, write-all …); upload-artifact'ın `overwrite: true` girdisi bir izin değildir
+  assert.doesNotMatch(isBlok('derle').join('\n'), /\bwrite\b/);
   assert.deepEqual(izinler('yayinla'), ['contents: write', 'pages: write']);
   // write yalnız yayinla işinde geçer
   const disinda = [...ustBlok('on'), ...isBlok('derle')].join('\n');
-  assert.doesNotMatch(disinda, /write/);
+  assert.doesNotMatch(disinda, /\bwrite\b/);
 });
 
-test('eşzamanlılık: ekran grubu, çalışan koşu iptal edilmez', () => {
-  assert.deepEqual(yorumsuz(ustBlok('concurrency')).map((s) => s.trim()).filter(Boolean), ['group: ekran', 'cancel-in-progress: false']);
+test('eşzamanlılık: grup dal başına (başka daldan gelen dispatch main koşusunu iptal/kuyruktan atamaz), çalışan koşu iptal edilmez', () => {
+  assert.deepEqual(yorumsuz(ustBlok('concurrency')).map((s) => s.trim()).filter(Boolean), ['group: ekran-${{ github.ref }}', 'cancel-in-progress: false']);
 });
 
 test('iki iş vardır: derle ve yayinla; yayinla derle\'ye bağlıdır ve yalnız hazirsa koşar', () => {
@@ -113,6 +122,8 @@ test('derle yalnız main dalında koşar (başka daldaki workflow_dispatch yayı
   assert.ok(ust.includes("if: github.ref == 'refs/heads/main'"), ust.join(' | '));
   assert.ok(ust.includes('timeout-minutes: 25'), ust.join(' | '));
   assert.ok(ust.includes('hazir: ${{ steps.kaynak.outputs.hazir }}'), ust.join(' | '));
+  // derlenen sabit sha çıktı olarak taşınır (yayinla kayma denetimi için)
+  assert.ok(ust.includes('sha: ${{ steps.kaynak.outputs.sha }}'), ust.join(' | '));
 });
 
 test('her uses: tam 40 haneli SHA ile sabitli (sürüm yorumuyla); checkout ve setup-node bilinen SHA\'larla', () => {
@@ -166,6 +177,9 @@ test('derle: ekran-paket yüklenir; yalnız ekran dosyaları, eksik dosyada hata
   const yukle = adimBul('derle', (a) => a.includes('actions/upload-artifact@'));
   assert.match(yukle, /^\s*name: ekran-paket$/m);
   assert.match(yukle, /^\s*if-no-files-found: error$/m);
+  // aynı ada yeniden yükleme (yeniden koşu) çakışmaz; paket bir günden uzun saklanmaz
+  assert.match(yukle, /^\s*overwrite: true$/m);
+  assert.match(yukle, /^\s*retention-days: 1$/m);
   for (const d of ['index.html', 'ekran.js', 'ekran.css', 'sw.js', 'akis.json', 'icerik.json', 'butce.json', 'fonts']) {
     assert.match(yukle, new RegExp(`^\\s*_site/dist/ekran/${d}$`, 'm'), d);
   }
@@ -201,8 +215,10 @@ test('yayın adımı: yalnız doğrulanmış yolları tek tek ekler; rebase + 3 
   const yayin = adimBul('yayinla', (a) => a.includes('id: yayin'));
   assert.match(yayin, /c\/\.ekran-yazilan/);
   assert.match(yayin, /if \[ ! -s c\/\.ekran-yazilan \].*itildi=0/s);
-  // yol süzgeci: ekran/ altı ya da c/<id>/ altındaki dört dosya; `..` ve başka her şey reddedilir
-  assert.ok(yayin.includes(String.raw`izinli='^(ekran/[A-Za-z0-9._/-]+|c/[a-z0-9][a-z0-9-]{2,39}/(index\.html|sw\.js|icerik\.json|akis\.json))$'`), 'izinli yol deseni');
+  // yol süzgeci: ekran/{ekran.js,ekran.css,butce.json,fonts/<güvenli ad>} ya da c/<id>/ altındaki dört dosya (<id> referans cami değil);
+  // `.`/`..` bölümleri, `.git` ve başka her şey reddedilir
+  assert.ok(yayin.includes(String.raw`izinli='^(ekran/(ekran\.js|ekran\.css|butce\.json|fonts/[A-Za-z0-9][A-Za-z0-9._-]*)|c/[a-z0-9][a-z0-9-]{2,39}/(index\.html|sw\.js|icerik\.json|akis\.json))$'`), 'izinli yol deseni');
+  assert.ok(yayin.includes(String.raw`yasakli='^c/ulucamii-marche/'`), 'referans cami yasağı');
   assert.match(yayin, /\[\[ ! "\$yol" =~ \$izinli \]\] \|\| \[\[ "\$yol" == \*\.\.\* \]\]/);
   assert.match(yayin, /git add -A -- "\$yol"/);
   // toplu ekleme yok
@@ -237,4 +253,155 @@ test('Pages derlemesi yalnız itildiyse ve GITHUB_TOKEN ile istenir', () => {
   assert.match(p, /if: steps\.yayin\.outputs\.itildi == '1'/);
   assert.match(p, /GH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.doesNotMatch(p, /secrets\./);
+});
+
+// ------------------------------------------------------------------ bash ile çalışan denetimler
+// Yayın yol süzgeci ve kayma denetimi, iş akışındaki GERÇEK satırlarla bash'te sınanır (metin eşleştirmesi tek başına yetmez).
+
+const gecici = [];
+const geciciDizin = (ad) => { const d = mkdtempSync(join(tmpdir(), `ekran-${ad}-`)); gecici.push(d); return d; };
+after(() => { for (const d of gecici) rmSync(d, { recursive: true, force: true }); });
+const ileri = (y) => y.replace(/\\/g, '/');
+
+/** Adımın `run: |` bloğu: ilk satırın girintisi atılmış satırlar. */
+function runSatirlari(adim) {
+  const ls = adim.split('\n');
+  const bas = ls.findIndex((s) => /^\s*run: \|$/.test(s));
+  assert.notEqual(bas, -1, 'run: | bloğu yok');
+  const g = ls.slice(bas + 1);
+  const girinti = g[0].match(/^ */)[0].length;
+  return g.map((s) => s.slice(girinti));
+}
+
+/** Betiği dosyaya yazıp `bash` ile çalıştırır (komut satırı tırnak sorunlarından kaçınmak için). bash yoksa null. */
+function bashCalistir(betik, { girdi = '', cwd, env, bayrak = [] } = {}) {
+  const d = geciciDizin('bash');
+  const dosya = join(d, 'betik.sh');
+  writeFileSync(dosya, betik, 'utf8');
+  const r = spawnSync('bash', [...bayrak, ileri(dosya)], { encoding: 'utf8', input: girdi, cwd, env: { ...process.env, ...env }, timeout: 60000 });
+  return r.error ? null : r;
+}
+const BASH_VAR = (() => {
+  try {
+    const r = bashCalistir('echo tamam\n');
+    return r !== null && r.status === 0 && r.stdout.trim() === 'tamam';
+  } catch { return false; }
+})();
+const BASH_YOK = BASH_VAR ? false : 'bash kullanılamıyor';
+
+/** İş akışının yol süzgeci satırlarıyla her yolu sınar; kabul edilen yolların kümesi döner. */
+function suzgecKabul(yollar) {
+  const run = runSatirlari(adimBul('yayinla', (a) => a.includes('id: yayin'))).map((s) => s.trim());
+  const izinli = run.find((s) => s.startsWith('izinli='));
+  const yasakli = run.find((s) => s.startsWith('yasakli='));
+  const kontrol = run.find((s) => s.startsWith('if [[ ! "$yol" =~ $izinli ]]'));
+  assert.ok(izinli && yasakli && kontrol, 'süzgeç satırları bulunmalı');
+  // her yol kendi alt kabuğunda: red `exit 1` ile alt kabuğu bitirir, kabul KABUL: satırı basar
+  const betik = [izinli, yasakli, 'while IFS= read -r yol; do', `( ${kontrol}`, '  echo "KABUL:$yol" )', 'done', 'exit 0', ''].join('\n');
+  const r = bashCalistir(betik, { girdi: yollar.join('\n') + '\n' });
+  assert.ok(r && r.status === 0, r?.stderr);
+  return new Set(r.stdout.split('\n').filter((s) => s.startsWith('KABUL:')).map((s) => s.slice(6)));
+}
+
+test('yayın yol süzgeci (bash, gerçek satırlar): yalnız izinli yollar geçer; . / .. / .git bölümleri, referans cami ve ekran/ altındaki başka dosyalar reddedilir', { skip: BASH_YOK }, () => {
+  const IYI = [
+    'ekran/ekran.js', 'ekran/ekran.css', 'ekran/butce.json', 'ekran/fonts/a.woff2', 'ekran/fonts/Inter-Bold.woff2', 'ekran/fonts/a.b_c-1.woff2',
+    'c/deneme-a/index.html', 'c/deneme-a/sw.js', 'c/deneme-a/icerik.json', 'c/deneme-a/akis.json', 'c/x-yz/akis.json', 'c/ulucamii-marche2/index.html',
+  ];
+  const KOTU = [
+    'ekran/.', 'ekran/./x', 'ekran/.git/config', 'ekran/../x', 'ekran/', 'ekran', 'ekran/x', 'ekran/index.html', 'ekran/vakitler.json',
+    'ekran/ekranxjs', 'ekran/ekran.jsx', 'ekran/ekran.js/x', 'ekran/fonts', 'ekran/fonts/', 'ekran/fonts/.', 'ekran/fonts/..', 'ekran/fonts/.git', 'ekran/fonts/.x',
+    'ekran/fonts/a..b', 'ekran/fonts/a/b', 'ekran/fonts/a/../b', 'ekran/fonts/a b', 'ekran/.git/fonts/a.woff2',
+    'c/ulucamii-marche/index.html', 'c/ulucamii-marche/sw.js', 'c/ulucamii-marche/icerik.json', 'c/ulucamii-marche/akis.json', 'c/ulucamii-marche/vakitler.json',
+    'c/x/../y', 'c/x/index.html', 'c/deneme-a/../ulucamii-marche/index.html', 'c/deneme-a/./index.html', 'c/.git/index.html', 'c/.ekran-yazilan', 'c/../index.html',
+    'c/deneme-a/vakitler.json', 'c/deneme-a/sub/index.html', 'c/deneme-a/index.htmlx', 'c/Deneme/index.html', 'c//index.html', 'c/deneme-a', 'c/deneme-a/',
+    'camipano/releases/x.apk', 'index.html', 'camiler.json', '.git/config', '.github/workflows/ekran.yml', 'arac/ekran/yerlestir.mjs', '/ekran/ekran.js', '../ekran/ekran.js',
+  ];
+  // yerlestir.mjs'in referans listesindeki her cami (sayfası ulucamii.be/ekran/'da kalır) süzgeçte de yasaklı olmalı
+  for (const id of REFERANS_CAMILER) for (const a of ['index.html', 'sw.js', 'icerik.json', 'akis.json']) KOTU.push(`c/${id}/${a}`);
+  const kabul = suzgecKabul([...IYI, ...KOTU]);
+  for (const y of IYI) assert.ok(kabul.has(y), `kabul edilmeliydi: ${y}`);
+  for (const y of KOTU) assert.ok(!kabul.has(y), `reddedilmeliydi: ${y}`);
+});
+
+test('yayın yol süzgeci (bash): yerlestir.mjs\'in gerçekte yazdığı/sildiği her yol süzgeçten geçer', { skip: BASH_YOK }, async () => {
+  const paket = geciciDizin('paket');
+  cpSync(FIKSTUR, paket, { recursive: true });
+  const cami = (camiId) => ({ camiId, adTr: `${camiId} Camii`, adFr: '', ilce: '12345', ilceAdi: 'ORNEK', slug: camiId, saatDilimi: 'Europe/Brussels', konum: { enlem: 50.1, boylam: 5.2 }, cumaSaati: '' });
+  const camiler = camilerOku(JSON.stringify({ surum: 1, camiler: [cami('ulucamii-marche'), cami('deneme-a'), cami('deneme-b-2')] }));
+  const kok = geciciDizin('kok');
+  mkdirSync(join(kok, 'ekran', 'fonts'), { recursive: true });
+  writeFileSync(join(kok, 'ekran', 'fonts', 'eski.woff2'), 'eski'); // silinecek yazı tipi de listeye girer
+  await yerlestir({ paket, kok, camiler });
+  const liste = readFileSync(join(kok, 'c', '.ekran-yazilan'), 'utf8').split('\n').filter(Boolean);
+  assert.ok(liste.length >= 12, String(liste.length));
+  assert.ok(liste.includes('ekran/fonts/eski.woff2'));
+  const kabul = suzgecKabul(liste);
+  for (const y of liste) assert.ok(kabul.has(y), `yerlestir'in yazdığı yol süzgeçten geçmeli: ${y}`);
+});
+
+test('kayma denetimi: derle çıktısı sha, yayinla yeni checkout\'ta ekran-kaynak.json\'u yeniden okur; fark varsa yayın atlanır (yeşil), sonraki adımlar guncel çıktısına bağlıdır', () => {
+  const adimlarY = adimlar('yayinla');
+  const guncelIx = adimlarY.findIndex((a) => /^\s*- id: guncel$/m.test(a));
+  assert.notEqual(guncelIx, -1, 'guncel adımı yok');
+  const guncel = adimlarY[guncelIx];
+  // girdi ortam değişkeniyle taşınır (ifade doğrudan betiğe gömülmez); kaynak aynı betikle okunur
+  assert.match(guncel, /^\s*DERLENEN_SHA: \$\{\{ needs\.derle\.outputs\.sha \}\}$/m);
+  assert.match(guncel, /node arac\/ekran\/kaynak\.mjs/);
+  assert.match(guncel, /evet=1/);
+  assert.match(guncel, /evet=0/);
+  assert.match(guncel, /yayın atlandı/);
+  assert.doesNotMatch(guncel, /exit 1/, 'fark hata değil: iş yeşil biter, yeni koşu arkadan gelir');
+  // checkout ve setup-node'dan SONRA, testler/indirme/yerleştirme/yayından ÖNCE
+  const ix = (parca) => adimlarY.findIndex((x) => x.includes(parca));
+  assert.ok(ix('actions/checkout@') < guncelIx && ix('actions/setup-node@') < guncelIx);
+  const sonrakiler = ['node --test', 'actions/download-artifact@', 'arac/ekran/yerlestir.mjs', 'id: yayin'].map(ix);
+  for (const s of sonrakiler) assert.ok(s > guncelIx, 'guncel adımından sonra olmalı');
+  for (const a of adimlarY.slice(guncelIx + 1)) {
+    if (a.includes('pages/builds')) continue; // yalnız itildi == 1 ise koşar; yayın atlanınca itildi hiç yazılmaz
+    assert.match(a, /^\s*(- )?if: steps\.guncel\.outputs\.evet == '1'$/m, a);
+  }
+});
+
+function kaymaCalistir({ derlenen, kaynak }) {
+  const d = geciciDizin('kayma');
+  mkdirSync(join(d, 'arac', 'ekran'), { recursive: true });
+  copyFileSync(KAYNAK_MJS, join(d, 'arac', 'ekran', 'kaynak.mjs'));
+  writeFileSync(join(d, 'ekran-kaynak.json'), kaynak);
+  const adim = adimBul('yayinla', (a) => /^\s*- id: guncel$/m.test(a));
+  const cikti = join(d, 'GITHUB_OUTPUT.txt');
+  writeFileSync(cikti, '');
+  // GitHub'ın varsayılan kabuğu gibi: bash -e
+  const r = bashCalistir(runSatirlari(adim).join('\n') + '\n', { cwd: d, env: { DERLENEN_SHA: derlenen, GITHUB_OUTPUT: ileri(cikti) }, bayrak: ['-e'] });
+  return { status: r.status, stderr: r.stderr, mesaj: r.stdout, cikti: readFileSync(cikti, 'utf8') };
+}
+const SHA_A = 'a'.repeat(40);
+const SHA_B = 'b'.repeat(40);
+const kaynakJson = (sha) => JSON.stringify({ surum: 1, repo: 'ulucamii2026/ulucamii2026.github.io', sha });
+
+test('kayma denetimi (bash, gerçek adım): aynı sha → evet=1; farklı ya da boşaltılmış sha → evet=0, mesajlı ve başarıyla biter; bozuk dosya kırmızı', { skip: BASH_YOK }, () => {
+  const ayni = kaymaCalistir({ derlenen: SHA_A, kaynak: kaynakJson(SHA_A) });
+  assert.equal(ayni.status, 0, ayni.stderr);
+  assert.match(ayni.cikti, /^evet=1$/m);
+  assert.doesNotMatch(ayni.cikti, /^evet=0$/m);
+
+  for (const kaynak of [kaynakJson(SHA_B), kaynakJson('')]) {
+    const fark = kaymaCalistir({ derlenen: SHA_A, kaynak });
+    assert.equal(fark.status, 0, fark.stderr);
+    assert.match(fark.cikti, /^evet=0$/m);
+    assert.doesNotMatch(fark.cikti, /^evet=1$/m);
+    assert.match(fark.mesaj, /yayın atlandı/);
+  }
+
+  // dosya bozuksa sessizce atlanmaz: adım kırmızı biter
+  const bozuk = kaymaCalistir({ derlenen: SHA_A, kaynak: '{bozuk' });
+  assert.notEqual(bozuk.status, 0);
+  assert.doesNotMatch(bozuk.cikti, /^evet=/m);
+});
+
+test('.gitignore: yalnız yerleştirme yardımcı dosyaları (c/.ekran-yazilan, c/.basarili)', () => {
+  const yol = new URL('../../../.gitignore', import.meta.url);
+  assert.ok(existsSync(yol), '.gitignore yok');
+  const satirlarGi = readFileSync(yol, 'utf8').replace(/\r\n/g, '\n').split('\n').filter((s) => s.trim() !== '');
+  assert.deepEqual(satirlarGi, ['c/.ekran-yazilan', 'c/.basarili']);
 });

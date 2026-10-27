@@ -6,8 +6,9 @@ on:
     paths: [ekran-kaynak.json, camiler.json, "arac/ekran/**"]
 # Her iş kendi iznini bildirir: varsayılan yetki yok.
 permissions: {}
+# Grup dal başına: başka daldan gelen bir workflow_dispatch, main'in koşusunu iptal edemez ya da kuyruktan atamaz.
 concurrency:
-  group: ekran
+  group: ekran-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   # SALT OKUMA: sitenin sabitlenmiş commit'i burada derlenir (npm ci bağımlılık betiklerini çalıştırır).
@@ -20,6 +21,8 @@ jobs:
       contents: read
     outputs:
       hazir: ${{ steps.kaynak.outputs.hazir }}
+      # Derlenen sabit site commit'i: yayinla, derleme sürerken sabitlemenin değişip değişmediğini bununla denetler.
+      sha: ${{ steps.kaynak.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,6 +60,8 @@ jobs:
             _site/dist/ekran/butce.json
             _site/dist/ekran/fonts
           if-no-files-found: error
+          overwrite: true
+          retention-days: 1
   # YAZMA YETKİLİ: npm ve site kodu YOK. Yalnız indirilmiş paketi yerleştirir ve doğrulanmış yolları ekler.
   yayinla:
     needs: derle
@@ -74,24 +79,45 @@ jobs:
           filter: blob:none
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 24 }
-      - run: node --test arac/vakit/test/*.test.mjs arac/ekran/test/*.test.mjs
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # Sabitleme kayması: derle'nin derlediği sha ile bu taze checkout'taki ekran-kaynak.json aynı olmalı. Farklıysa
+      # (derleme sürerken yeni bir sabitleme girdi) paket bayattır: yayınlanmaz, iş yeşil biter; yeni koşu arkadan gelir.
+      - id: guncel
+        env:
+          DERLENEN_SHA: ${{ needs.derle.outputs.sha }}
+        run: |
+          kaynak="$(node arac/ekran/kaynak.mjs)"
+          simdiki="$(printf '%s\n' "$kaynak" | sed -n 's/^sha=//p')"
+          if [ "$simdiki" = "$DERLENEN_SHA" ]; then
+            echo "evet=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "evet=0" >> "$GITHUB_OUTPUT"
+            echo "ekran-kaynak.json sabitlemesi derleme sırasında değişti (derlenen: ${DERLENEN_SHA:0:7}, şimdiki: ${simdiki:0:7}); yayın atlandı, yeni koşu arkadan gelecek"
+          fi
+      - if: steps.guncel.outputs.evet == '1'
+        run: node --test arac/vakit/test/*.test.mjs arac/ekran/test/*.test.mjs
+      - if: steps.guncel.outputs.evet == '1'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ekran-paket
           path: _paket
       - id: yerlestir
+        if: steps.guncel.outputs.evet == '1'
         run: node arac/ekran/yerlestir.mjs --paket _paket --kok .
       - id: yayin
+        if: steps.guncel.outputs.evet == '1'
         name: Değiştiyse yayınla
         run: |
           git config user.name "camipano-ekran"
           git config user.email "camipano-ekran@users.noreply.github.com"
           # Yerleştirmenin değiştirdiği yollar (yazılan + silinen); liste boşsa yayımlanacak bir şey yoktur.
           if [ ! -s c/.ekran-yazilan ]; then echo "itildi=0" >> "$GITHUB_OUTPUT"; echo "değişiklik yok"; exit 0; fi
-          izinli='^(ekran/[A-Za-z0-9._/-]+|c/[a-z0-9][a-z0-9-]{2,39}/(index\.html|sw\.js|icerik\.json|akis\.json))$'
+          # Yalnız yerleştirmenin yazdığı yollar: ekran/{ekran.js,ekran.css,butce.json,fonts/<güvenli ad>} ve c/<id>/ altındaki dört dosya
+          # (<id> referans cami olamaz); `.`/`..` bölümleri ve .git reddedilir.
+          izinli='^(ekran/(ekran\.js|ekran\.css|butce\.json|fonts/[A-Za-z0-9][A-Za-z0-9._-]*)|c/[a-z0-9][a-z0-9-]{2,39}/(index\.html|sw\.js|icerik\.json|akis\.json))$'
+          yasakli='^c/ulucamii-marche/'
           while IFS= read -r yol || [ -n "$yol" ]; do
             [ -n "$yol" ] || continue
-            if [[ ! "$yol" =~ $izinli ]] || [[ "$yol" == *..* ]]; then echo "izin verilmeyen yol, yayın durdu: $yol"; exit 1; fi
+            if [[ ! "$yol" =~ $izinli ]] || [[ "$yol" == *..* ]] || [[ "$yol" =~ $yasakli ]] || [[ "/$yol/" == */./* ]] || [[ "/$yol/" == */.git/* ]]; then echo "izin verilmeyen yol, yayın durdu: $yol"; exit 1; fi
             git add -A -- "$yol"
           done < c/.ekran-yazilan
           if git diff --cached --quiet; then echo "itildi=0" >> "$GITHUB_OUTPUT"; echo "değişiklik yok"; exit 0; fi
