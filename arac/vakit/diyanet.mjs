@@ -2,12 +2,18 @@
 // Sitedeki scripts/namaz-vakitleri.mjs'den (origin/main 52f4e34) taşındı; eşdeğerliği esdeger.mjs denetler.
 // Saf parçalar birebir taşındı; dosya yazımı, ortam değişkeni (NAMAZ_HTML) ve process.exit taşınmadı.
 //
-// İKİ DİYANET KAYNAĞI, TEK VERİ:
-//   1) RESMÎ SAYFA  https://namazvakitleri.diyanet.gov.tr/tr-TR/<ilçe>/<slug>-namaz-vakitleri  (birincil)
+// ÜÇ DİYANET KAYNAĞI, TEK VERİ:
+//   0) AWQAT API    https://awqatsalah.diyanet.gov.tr  (birincil; resmî REST servisi, kimlikli — awqat.mjs)
+//      Kimlik yoksa ya da servis/kota hatası varsa atlanır.
+//   1) RESMÎ SAYFA  https://namazvakitleri.diyanet.gov.tr/tr-TR/<ilçe>/<slug>-namaz-vakitleri  (ilk yedek)
 //      GitHub Actions'tan 200 döner; Belçika'daki bağlantılardan açılmaz (bağlantı sıfırlanıyor).
-//   2) AYNA         https://ezanvakti.emushaf.net/vakitler/<ilçe>  (yedek)
+//   2) AYNA         https://ezanvakti.emushaf.net/vakitler/<ilçe>  (son yedek)
 //      Diyanet verisinin JSON aynası, 32 günlük kayan pencere. Belçika'dan çalışır; bulut IP'lerine 403 döner.
-// HESAPLAMA TABANLI YEDEK KAYNAK YOKTUR: ikisi de başarısızsa hata fırlatılır, çağıran mevcut dosyayı korur.
+// HESAPLAMA TABANLI YEDEK KAYNAK YOKTUR: üçü de başarısızsa hata fırlatılır, çağıran mevcut dosyayı korur.
+import { awqatCek, awqatKimligi, AWQAT_ALANI } from './awqat.mjs';
+import { ilceAdiNorm } from './ilce-adi.mjs';
+
+export { ilceAdiNorm };
 
 export const AYLAR = { Ocak: 1, Şubat: 2, Mart: 3, Nisan: 4, Mayıs: 5, Haziran: 6, Temmuz: 7, Ağustos: 8, Eylül: 9, Ekim: 10, Kasım: 11, Aralık: 12 };
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) camipano-vakit/1.0 (+https://camipano.github.io)';
@@ -17,8 +23,8 @@ const bekleGercek = (ms) => new Promise((c) => setTimeout(c, ms));
 export const resmiAdres = (ilce, slug) => `https://namazvakitleri.diyanet.gov.tr/tr-TR/${ilce}/${slug}-namaz-vakitleri`;
 export const aynaAdres = (ilce) => `https://ezanvakti.emushaf.net/vakitler/${ilce}`;
 
-/** Yalnız bu iki alandan veri alınır; yönlendirme başka yere giderse yanıt reddedilir. */
-export const IZINLI_KAYNAK_ALANLARI = ['namazvakitleri.diyanet.gov.tr', 'ezanvakti.emushaf.net'];
+/** Yalnız bu alanlardan veri alınır; yönlendirme başka yere giderse yanıt reddedilir. */
+export const IZINLI_KAYNAK_ALANLARI = [AWQAT_ALANI, 'namazvakitleri.diyanet.gov.tr', 'ezanvakti.emushaf.net'];
 
 /** Yeniden denemenin anlamsız olduğu hata (yanlış ilçe, yabancı alana yönlendirme). */
 const tekrarsiz = (ileti) => Object.assign(new Error(ileti), { tekrarYok: true });
@@ -43,9 +49,6 @@ function sonAdresiDenetle(r, beklenen = {}) {
     if (!yol.endsWith(beklenenParca)) throw tekrarsiz(`yanıt başka ilçeye yönlendirildi (beklenen: "${beklenenParca}", bulunan: "${u.pathname}"): ` + r.url);
   }
 }
-
-/** İlçe adı karşılaştırması: aksan, büyük/küçük harf ve İ/ı farkı yok sayılır ("M.famenne" ≡ "M.FAMENNE"). */
-export const ilceAdiNorm = (s) => s.normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase().trim();
 
 /**
  * Resmî sayfanın tablo başlığındaki ilçe adı: "<ad> İçin Haftalık Namaz Vakitleri" (Aylık/Yıllık da olur).
@@ -147,13 +150,23 @@ async function aynadanCek(ilce, getir, bekle) {
 }
 
 /**
- * Önce resmî sayfa (en az 7 gün), olmazsa ayna. `ilceAdi` verilmişse resmî sayfanın başlığındaki ilçe adı
- * eşleşmek zorundadır (ayna başlık taşımadığı için ona uygulanmaz). Başlıkta başka ilçe çıkarsa aynaya da geçilmez:
- * ayna aynı ilçe numarasını kullanır, o da başka ilçenin vakitlerini verir. İkisi de başarısızsa hata fırlatır;
- * hesapla onarım yoktur.
- * @returns { gunler, kaynakAdi: 'resmî sayfa'|'ayna', kaynakUc }
+ * Önce Awqat (kimlik varsa), sonra resmî sayfa (en az 7 gün), olmazsa ayna. `ilceAdi` verilmişse Awqat'ın CityDetail
+ * adı ve resmî sayfanın başlığındaki ilçe adı eşleşmek zorundadır (ayna başlık taşımadığı için ona uygulanmaz). Başka
+ * ilçe çıkarsa sonraki kaynaklara geçilmez: hepsi aynı ilçe numarasını kullanır, onlar da başka ilçenin vakitlerini verir.
+ * Hepsi başarısızsa hata fırlatır; hesapla onarım yoktur.
+ * @returns { gunler, kaynakAdi: 'awqat'|'resmî sayfa'|'ayna', kaynakUc }
  */
-export async function cek({ ilce, slug, ilceAdi }, { getir = fetch, bekle = bekleGercek } = {}) {
+export async function cek({ ilce, slug, ilceAdi, saatDilimi }, { getir = fetch, bekle = bekleGercek, kimlik = awqatKimligi(), simdi = () => new Date() } = {}) {
+  let e0 = null;
+  if (kimlik) {
+    try {
+      return await awqatCek({ ilce, ilceAdi, saatDilimi }, { getir, bekle, kimlik, simdi });
+    } catch (e) {
+      if (e.ilceUyusmaz) throw new Error(`ilçe ${ilce} artık kayıttaki ilçeyi göstermiyor — ${e.message}; camiler.json denetlenmeli`);
+      e0 = e;
+      console.warn('Awqat alınamadı: ' + e.message + ' → resmî sayfa deneniyor');
+    }
+  }
   try {
     const resmi = await resmiSayfadanCek(ilce, slug, ilceAdi, getir, bekle);
     return { gunler: resmi.gunler, kaynakAdi: 'resmî sayfa', kaynakUc: resmi.sonAdres };
@@ -164,7 +177,7 @@ export async function cek({ ilce, slug, ilceAdi }, { getir = fetch, bekle = bekl
       const ayna = await aynadanCek(ilce, getir, bekle);
       return { gunler: ayna.gunler, kaynakAdi: 'ayna', kaynakUc: ayna.sonAdres };
     } catch (e2) {
-      throw new Error('Diyanet vakitleri hiçbir kaynaktan alınamadı — resmî: ' + e1.message + ' · ayna: ' + e2.message);
+      throw new Error('Diyanet vakitleri hiçbir kaynaktan alınamadı — ' + (e0 ? 'awqat: ' + e0.message + ' · ' : '') + 'resmî: ' + e1.message + ' · ayna: ' + e2.message);
     }
   }
 }

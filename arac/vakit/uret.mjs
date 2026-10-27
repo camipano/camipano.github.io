@@ -1,7 +1,7 @@
 // Cami başına vakitler.json üretimi: camiler.json → c/<camiId>/vakitler.json.
-// Akış (her cami için): eldeki dosya (taban) → çek → birleştir → doğrula → kapı → yaz.
+// Akış (her cami için): eldeki dosya (taban) → çek (Awqat → resmî sayfa → ayna) → birleştir → doğrula → kapı → yaz.
 // Bir cami başarısız olursa diğerleri sürer, o caminin mevcut dosyası korunur, çıkış kodu ≠ 0 olur.
-// HESAPLAMA TABANLI YEDEK KAYNAK YOKTUR: yalnız Diyanet'in resmî sayfası ve aynası.
+// HESAPLAMA TABANLI YEDEK KAYNAK YOKTUR: yalnız Diyanet (Awqat API, resmî sayfa, ayna).
 //
 // CLI: node arac/vakit/uret.mjs
 import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync, renameSync, unlinkSync } from 'node:fs';
@@ -56,7 +56,7 @@ export async function uret({ kok, getir, bekle, simdi = () => new Date(), cek = 
       const an = simdi();
       const bugun = bugunISO(an);
 
-      const taze = await cek({ ilce: cami.ilce, slug: cami.slug, ilceAdi: cami.ilceAdi }, { getir, bekle });
+      const taze = await cek({ ilce: cami.ilce, slug: cami.slug, ilceAdi: cami.ilceAdi, saatDilimi: cami.saatDilimi }, { getir, bekle, simdi: () => an });
       if (!kaynakIzinliMi(taze.kaynakUc)) throw new Error(`kaynak adresi izinli alanlarda değil: ${taze.kaynakUc}`);
 
       const { gunler, yeni, duzeltme } = birlestir(eldeki?.gunler ?? [], taze.gunler, bugun);

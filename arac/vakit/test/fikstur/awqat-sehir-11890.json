@@ -1,0 +1,16 @@
+{
+ "data": {
+  "id": "11890",
+  "name": "M.FAMENNE",
+  "code": "M.FAMENNE",
+  "geographicQiblaAngle": "123",
+  "distanceToKaaba": "4392",
+  "qiblaAngle": "123",
+  "city": "BELCIKA",
+  "cityEn": "BELGIUM",
+  "country": "BELCIKA",
+  "countryEn": "BELGIUM"
+ },
+ "success": true,
+ "message": null
+}

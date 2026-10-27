@@ -34,8 +34,8 @@ const dosyaYolu = (kok, id) => join(kok, 'c', id, 'vakitler.json');
 const oku = (kok, id) => JSON.parse(readFileSync(dosyaYolu(kok, id), 'utf8'));
 const sustur = (t) => { t.mock.method(console, 'warn', () => {}); t.mock.method(console, 'log', () => {}); t.mock.method(console, 'error', () => {}); };
 
-test('izinli kaynak alanları yalnız iki Diyanet alanıdır', () => {
-  assert.deepEqual(IZINLI_KAYNAK_ALANLARI, ['namazvakitleri.diyanet.gov.tr', 'ezanvakti.emushaf.net']);
+test('izinli kaynak alanları yalnız üç Diyanet alanıdır (Awqat API, resmî sayfa, ayna)', () => {
+  assert.deepEqual(IZINLI_KAYNAK_ALANLARI, ['awqatsalah.diyanet.gov.tr', 'namazvakitleri.diyanet.gov.tr', 'ezanvakti.emushaf.net']);
 });
 
 test('iki cami iki dosya yazar; çıktı Diyanet damgalı ve dünden başlar', async (t) => {
