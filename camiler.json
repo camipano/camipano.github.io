@@ -2,20 +2,6 @@
   "surum": 1,
   "camiler": [
     {
-      "camiId": "d2-deneme",
-      "adTr": "Deneme Camii",
-      "adFr": "Deneme Camii",
-      "ilce": "11704",
-      "ilceAdi": "AALST",
-      "slug": "aalst",
-      "saatDilimi": "Europe/Brussels",
-      "konum": {
-        "enlem": 50.94,
-        "boylam": 4.04
-      },
-      "cumaSaati": ""
-    },
-    {
       "camiId": "ulucamii-marche",
       "adTr": "Marche-en-Famenne Ulu Camii",
       "adFr": "Mosquée Ulu Camii de Marche-en-Famenne",
