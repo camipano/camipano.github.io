@@ -1,5 +1,6 @@
 // yerlestir.mjs testleri — cami başına sayfa yerleştirme.
-// Gerçek site derlemesinin biçimini taşıyan fikstür: fikstur/dist-ekran/ (index.html gerçek derlemenin bayt kopyasıdır).
+// Gerçek site derlemesinin biçimini taşıyan fikstür: fikstur/dist-ekran/ (index.html, sw.js, akis.json, icerik.json ve butce.json
+// gerçek derlemenin bayt kopyasıdır; ekran.js, ekran.css ve fonts/ uydurmadır).
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -160,16 +161,22 @@ test('sayfaUret: şablonun #ekran-veri\'sinde bilinmeyen anahtar Error verir (ye
   // ilce şablonda varsa da yoksa da geçer; değer her zaman caminin kendisinden gelir
   const ilceli = sayfaUret(veriDegistir(s, (v) => ({ ...v, ilce: '11890' })), cami());
   assert.equal(veriOku(ilceli).ilce, '12345');
-  assert.ok(!('ilce' in veriOku(s)), 'gerçek fikstürde ilce yok (eski iskelet)');
+  // gerçek derleme artık ilçeyi taşır (S1); sayfaya yine caminin kendi ilçesi yazılır
+  assert.equal(veriOku(s).ilce, '11890', 'gerçek fikstürde ilce var (konumdan bağımsız iskelet)');
   assert.equal(veriOku(sayfaUret(s, cami())).ilce, '12345');
+  // eski iskelet (önbellekteki, ilce alanı yok) da geçer: Review Focus 1
+  const eskiIskelet = veriDegistir(s, ({ ilce: _ilce, ...v }) => v);
+  assert.ok(!('ilce' in veriOku(eskiIskelet)));
+  assert.equal(veriOku(sayfaUret(eskiIskelet, cami())).ilce, '12345');
 });
 
 // ---------------------------------------------------------------- akisUret
 
 test('akisUret: sitenin duyuruları dolu olsa da çıktı boş (Ulu Camii duyurusu sızmaz); ayar siteden', () => {
-  const site = okuFikstur('akis.json');
-  const siteJson = JSON.parse(site);
-  assert.ok(siteJson.duyurular.length > 0, 'fikstürde dolu duyuru olmalı');
+  // gerçek derlemenin akışında duyuru yoktur (derleme anında boş yayımlanır); sızıntı sınaması için dolu bir akış kurulur
+  const siteJson = { ...JSON.parse(okuFikstur('akis.json')), duyurular: [{ id: 'sizdi', baslik: 'SIZINTI-ISARETI' }] };
+  const site = JSON.stringify(siteJson);
+  assert.ok(siteJson.duyurular.length > 0, 'sitenin akışında dolu duyuru olmalı');
   const cikti = akisUret(site, null);
   const j = JSON.parse(cikti);
   assert.deepEqual(j.duyurular, []);
@@ -209,7 +216,7 @@ test('akisUret: bozuk ya da eksik site akışı Error verir', () => {
 
 test('icerikUret: derleme dışında aynıysa eski metin aynen; içerik değişmişse ya da eski yoksa site metni', () => {
   const site = okuFikstur('icerik.json');
-  const eski = site.replace('2026-10-27T10:40:24.325Z', '2026-01-01T00:00:00.000Z');
+  const eski = site.replace(JSON.parse(site).derleme, '2026-01-01T00:00:00.000Z');
   assert.notEqual(eski, site);
   assert.equal(icerikUret(site, eski), eski);
   const degisik = JSON.stringify({ ...JSON.parse(site), hadisler: [] });
@@ -231,7 +238,8 @@ test('swUret: yer tutucu tam bir kez değiştirilir; 0 ya da 2 kez ise ya da sü
   const sw = okuFikstur('sw.js');
   const cikti = swUret(sw, '0123456789abcdef');
   assert.ok(!cikti.includes('@@EKRAN_SURUM@@'));
-  assert.ok(cikti.includes('var S="0123456789abcdef";'));
+  // gerçek SW'de yer tutucu `S("@@EKRAN_SURUM@@", "<site sürümü>")` çağrısının ilk argümanıdır
+  assert.ok(cikti.includes('S("0123456789abcdef","'));
   assert.throws(() => swUret('"use strict";', '0123456789abcdef'), /EKRAN_SURUM/);
   assert.throws(() => swUret(sw + sw, '0123456789abcdef'), /EKRAN_SURUM/);
   for (const kotu of ['', 'xyz', '0123456789ABCDEF', '0123456789abcde', '0123456789abcdef0', '$&$&$&$&$&$&$&$&']) {
@@ -262,6 +270,9 @@ test('yerlestir: referans cami yazılmaz, platform camileri dört dosya alır, k
   const paket = paketKopyala();
   // paketle gelen Ulu Camii vakitleri hiçbir yere kopyalanmamalı
   writeFileSync(join(paket, 'vakitler.json'), JSON.stringify({ ilce: '11890', kaynakTuru: 'diyanet', gunler: [{ tarih: '2026-10-27' }] }));
+  // paketle gelen Ulu Camii duyurusu da hiçbir cami dosyasına girmemeli (gerçek derlemenin akışında duyuru yoktur: sızıntı işareti eklenir)
+  const akisPaket = JSON.parse(readFileSync(join(paket, 'akis.json'), 'utf8'));
+  writeFileSync(join(paket, 'akis.json'), JSON.stringify({ ...akisPaket, duyurular: [{ id: 'sizdi', baslik: 'SIZINTI-ISARETI' }] }));
   const kok = kokKur();
   const once = agac(kok);
   const camiler = camilerOku(readFileSync(join(kok, 'camiler.json'), 'utf8'));
@@ -288,8 +299,8 @@ test('yerlestir: referans cami yazılmaz, platform camileri dört dosya alır, k
   // iki caminin sw.js ve sürümleri farklı; yer tutucu kalmadı
   const swA = readFileSync(join(kok, 'c/deneme-a/sw.js'), 'utf8');
   const swB = readFileSync(join(kok, 'c/deneme-b/sw.js'), 'utf8');
-  assert.match(swA, /var S="[0-9a-f]{16}";/);
-  assert.match(swB, /var S="[0-9a-f]{16}";/);
+  assert.match(swA, /S\("[0-9a-f]{16}","/);
+  assert.match(swB, /S\("[0-9a-f]{16}","/);
   assert.notEqual(swA, swB);
   assert.ok(!swA.includes('@@EKRAN_SURUM@@') && !swB.includes('@@EKRAN_SURUM@@'));
   // sayfalar kendi cami kimliğini taşır
