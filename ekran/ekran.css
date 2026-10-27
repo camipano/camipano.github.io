@@ -1,0 +1,219 @@
+:root{--ana:#E30A17;--siyah:#000000;--beyaz:#FFFFFF;--zemin:#F4F2EA;--yuzey:#F8F6EE;--metin:#1A1A1A;--ikincil:#5B5F58;--cizgi:#DDD9C8}
+:root{--lh-kuran:1.95;--lh-metin:1.75;--k-kuran:1;--k-metin:1}
+@font-face { font-family: 'Ekran Kuran'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/arapca-kuran.woff2) format('woff2'); unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC; }
+@font-face { font-family: 'Ekran Metin'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/arapca-metin.woff2) format('woff2'); unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC; }
+/* Cami ekranı — /ekran/ekran.css. scripts/ekran-derle.mjs başına kurumsal renk değişkenlerini
+   (src/data/kurumsal-kimlik.json) ekler: --ana --siyah --beyaz --zemin --yuzey --metin --ikincil --cizgi.
+   ESKİ WEBVIEW UYUMU (Chromium 70): yeni renk fonksiyonları, clamp/min/max, has seçicisi, layer ve
+   container kuralları, kapsayıcı/dinamik görüntü birimleri, inset, aspect-ratio, gap ve iç içe kural
+   KULLANILMAZ — tests/ekran-eski-tarayici.test.mjs denetler. Bütün ölçüler --u'ya bağlıdır.
+   Arapça yüzleri (Ekran Kuran, Ekran Metin) scripts/ekran-derle.mjs ekler. */
+
+@font-face { font-family: 'Work Sans'; font-style: normal; font-weight: 100 900; font-display: swap; src: url(fonts/work-sans-latin.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Work Sans'; font-style: normal; font-weight: 100 900; font-display: swap; src: url(fonts/work-sans-latin-ext.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; background: var(--siyah); }
+[hidden] { display: none !important; }
+.sahne { position: fixed; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; background: var(--siyah); }
+.ekran { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--zemin); color: var(--metin); font-family: 'Work Sans', 'Segoe UI', Arial, sans-serif; font-size: calc(var(--u) * 3); line-height: 1.3; -webkit-font-smoothing: antialiased; transition: background-color .6s, color .6s; }
+.ekran[data-tema='koyu'] { background: var(--siyah); color: var(--zemin); }
+.fr { opacity: .78; }
+
+/* Üst bant: kimlik, saat, hava, miladi ve hicrî tarih */
+.ust { height: calc(var(--u) * 44); padding: calc(var(--u) * 3.5) calc(var(--u) * 5) calc(var(--u) * 2.5); border-bottom: calc(var(--u) * .7) solid var(--ana); overflow: hidden; }
+.kimlik { display: flex; align-items: center; height: calc(var(--u) * 12); }
+.logo { width: calc(var(--u) * 11); height: calc(var(--u) * 11); margin-right: calc(var(--u) * 3); }
+.ekran[data-tema='acik'] .logo-koyu, .ekran[data-tema='koyu'] .logo-acik { display: none; }
+.cami-adi span { display: block; }
+.cami-adi span:first-child { font-weight: 700; font-size: calc(var(--u) * 4.6); line-height: 1.1; }
+.cami-adi .fr { font-size: calc(var(--u) * 3.2); margin-top: calc(var(--u) * .6); }
+.zaman { display: flex; align-items: center; justify-content: space-between; height: calc(var(--u) * 17); }
+.saat { font-weight: 700; font-size: calc(var(--u) * 16); line-height: 1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.saat small { font-size: .4em; font-weight: 600; opacity: .7; }
+.ekran.saat-yok .saat { font-size: calc(var(--u) * 5); color: var(--ana); white-space: normal; }
+.takvim { font-size: calc(var(--u) * 3.3); line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.takvim.fr { font-size: calc(var(--u) * 2.8); }
+/* Miladi ile hicrî tarih arasındaki ayıraç; hicrî kısım boşsa (veri boşluğu, saat doğrulanıyor) ayıraçla birlikte gizlenir. */
+.hicri::before { content: ' · '; }
+.hicri:empty { display: none; }
+.hava { display: flex; align-items: center; font-weight: 700; font-size: calc(var(--u) * 5); }
+.hava svg { width: calc(var(--u) * 7); height: calc(var(--u) * 7); margin-right: calc(var(--u) * 1.5); }
+.hava small { font-weight: 400; font-size: calc(var(--u) * 1.8); opacity: .6; margin-left: calc(var(--u) * 1.5); }
+
+/* Orta: slayt alanı */
+.slayt-alani { flex: 1; position: relative; overflow: hidden; padding: calc(var(--u) * 4) calc(var(--u) * 5); background: var(--yuzey); }
+.ekran[data-tema='koyu'] .slayt-alani { background: var(--metin); }
+/* Sağ alt panel «levha» (A alt projesi). Üst başlık panelin tepesinde; levha kalan alanda dikeyde ortalı
+   (margin: auto 0 — taşarsa yalnız aşağı akar, scrollHeight tam ölçer; Chromium 70'te `safe center` yok). Boylar
+   src/lib/ekran/olcu.ts tabanları (--f-*, slaytCiz yazar) × tek ölçek (--olcek, levhaSigdir yazar). */
+.slayt { height: 100%; display: flex; flex-direction: column; text-align: center; }
+.ust-baslik { flex: none; font-size: calc(var(--u) * var(--f-ust)); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ana); margin-bottom: calc(var(--u) * 1.5); }
+.levha { flex: none; width: 100%; margin: auto 0; }
+.levha p { overflow-wrap: break-word; word-wrap: break-word; text-wrap: balance; }
+/* Arapça yüz rolü: Kur'an metni (data-yuz="kuran") 'Ekran Kuran', öteki 'Ekran Metin'; --lh-* ve --k-* yazi-tipleri.json'dan gelir. */
+.levha .ar { font-family: 'Ekran Metin', 'Traditional Arabic', serif; font-size: calc(var(--u) * var(--f-ar) * var(--olcek, 1) * var(--k-metin)); line-height: var(--lh-metin); }
+.levha .ar[data-yuz='kuran'] { font-family: 'Ekran Kuran', 'Ekran Metin', 'Traditional Arabic', serif; font-size: calc(var(--u) * var(--f-ar) * var(--olcek, 1) * var(--k-kuran)); line-height: var(--lh-kuran); padding-top: .3em; } /* durak işaretleri payı; ölçülebilen tarayıcıda levhaSigdir satıra göre yazar */
+.levha .susleme { display: block; width: calc(var(--u) * var(--f-susleme) * 10 * var(--olcek, 1)); height: calc(var(--u) * var(--f-susleme) * var(--olcek, 1)); margin: calc(var(--u) * 1.4 * var(--olcek, 1)) auto; }
+.susleme .yildiz { fill: var(--ana); }
+.levha .baslik { font-weight: 700; font-size: calc(var(--u) * var(--f-baslik-tr) * var(--olcek, 1)); line-height: 1.15; margin-bottom: calc(var(--u) * .8 * var(--olcek, 1)); }
+.levha .baslik.fr { font-size: calc(var(--u) * var(--f-baslik-fr) * var(--olcek, 1)); }
+.levha .tr { font-size: calc(var(--u) * var(--f-tr) * var(--olcek, 1)); line-height: 1.3; font-weight: 500; }
+.levha p.fr { font-size: calc(var(--u) * var(--f-fr) * var(--olcek, 1)); line-height: 1.3; margin-top: calc(var(--u) * .8 * var(--olcek, 1)); }
+.levha .kaynak .bolunmez { white-space: nowrap; }
+.levha .kaynak { font-size: calc(var(--u) * var(--f-kaynak) * var(--olcek, 1)); line-height: 1.25; opacity: .7; margin-top: calc(var(--u) * 1.4 * var(--olcek, 1)); }
+/* Afişli duyuru (data-yerlesim='afis-sol'): solda afiş panel boyunca, sağda başlık ve (sığarsa) metin. Afiş kutusunun
+   genişliğini slaytlar.ts → afisBoyutla yazar (yükseklik × görsel oranı, en çok %45; aspect-ratio Chromium 70'te yok). */
+.afisli { flex: 1; min-height: 0; display: flex; flex-direction: row; }
+.afis { flex: none; height: 100%; margin-right: calc(var(--u) * 3); }
+.afis img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.afisli .levha { flex: 1; min-width: 0; width: auto; }
+.slayt.bos { align-items: center; justify-content: center; }
+.slayt.bos b { font-size: calc(var(--u) * 7); color: var(--ana); }
+.slayt.bos p.fr { font-size: calc(var(--u) * 3.6); margin-top: calc(var(--u) * 1.5); }
+.slayt.bos .kaynak { font-size: calc(var(--u) * 2.6); opacity: .7; margin-top: calc(var(--u) * 3); }
+
+/* Alt: vakitler ve geri sayım */
+.vakitler { height: calc(var(--u) * 56); border-top: calc(var(--u) * .7) solid var(--ana); display: flex; flex-direction: column; }
+.vakit { display: flex; align-items: center; justify-content: space-between; height: calc(var(--u) * 7.4); padding: 0 calc(var(--u) * 5); border-bottom: calc(var(--u) * .1) solid var(--cizgi); }
+.ekran[data-tema='koyu'] .vakit { border-bottom-color: var(--metin); }
+.vakit .ad b { font-weight: 700; font-size: calc(var(--u) * 4.6); }
+.vakit .ad i { font-style: normal; font-size: calc(var(--u) * 3.1); opacity: .7; margin-left: calc(var(--u) * 2); }
+.vakit .deger { font-weight: 700; font-size: calc(var(--u) * 5.8); font-variant-numeric: tabular-nums; }
+.vakit.siradaki { background: var(--ana); color: var(--beyaz); border-bottom-color: var(--ana); }
+.vakit.siradaki .ad i { opacity: .9; }
+.geri-sayim { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 0 calc(var(--u) * 5); }
+.geri-sayim b { font-size: calc(var(--u) * 3.8); }
+.geri-sayim .fr { font-size: calc(var(--u) * 3); }
+/* Sitede sabit Cuma saati girilmişse Cuma günü geri sayımın altında "Cuma namazı SS:DD" (TR + FR alt alta):
+   vakit alanı 10u uzar, slayt alanı (flex: 1) o kadar kısalır; levha levhaSigdir ile yeniden sığdırılır. */
+.vakitler.cumali { height: calc(var(--u) * 66); }
+.cuma-saati { display: flex; flex-direction: column; justify-content: center; padding: 0 calc(var(--u) * 5) calc(var(--u) * 2.5); color: var(--ana); }
+.cuma-saati b { font-size: calc(var(--u) * 3.4); }
+.cuma-saati .fr { font-size: calc(var(--u) * 2.8); }
+.vakit-yok { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: calc(var(--u) * 5); color: var(--ana); }
+.vakit-yok b { font-size: calc(var(--u) * 5); }
+.vakit-yok .fr { font-size: calc(var(--u) * 3.8); margin-top: calc(var(--u) * 1.5); }
+
+/* Yatay düzen «A+» (src/ekran/olcek.ts → data-duzen='yatay'; u = tuval YÜKSEKLİĞİNİN %1'i, tuval 177,78u × 100u).
+   Solda 80u vakit sütunu: sıradaki vakit büyük bir blok olur, geri sayımı içinde taşır (vakitler.ts); sağda üstte
+   kimlik/saat/tarih (42u), altta slayt alanı. Hedef 40" TV, 9–14 m'den okunur (1u ≈ 0,5 cm). Dikey düzenin kuralları
+   ve pikselleri değişmez: her kural bu seçicinin altındadır. Taban kurallardaki sabit yükseklikler (44u, 56u, 66u),
+   miras line-height 1.3 ve yatay flex satırlar burada bilerek ezilir; yoksa satırlar taşardı
+   (tests/web/ekran.spec.mjs → «yatay A+ yerleşimi» ölçer). */
+.ekran[data-duzen='yatay'] { display: grid; grid-template-columns: calc(var(--u) * 80) minmax(0, 1fr); grid-template-rows: calc(var(--u) * 42) minmax(0, 1fr); grid-template-areas: 'vakit ust' 'vakit slayt'; }
+
+.ekran[data-duzen='yatay'] .ust { grid-area: ust; height: auto; min-height: 0; padding: calc(var(--u) * 2.5) calc(var(--u) * 4) calc(var(--u) * 2); }
+.ekran[data-duzen='yatay'] .kimlik { height: calc(var(--u) * 6.6); margin-bottom: calc(var(--u) * .6); }
+.ekran[data-duzen='yatay'] .logo { width: calc(var(--u) * 6); height: calc(var(--u) * 6); margin-right: calc(var(--u) * 2); }
+.ekran[data-duzen='yatay'] .cami-adi span:first-child { font-size: calc(var(--u) * 3.2); line-height: 1.1; }
+.ekran[data-duzen='yatay'] .cami-adi .fr { font-size: calc(var(--u) * 2.4); line-height: 1.1; margin-top: calc(var(--u) * .2); }
+.ekran[data-duzen='yatay'] .zaman { height: calc(var(--u) * 20); }
+/* overflow: Work Sans'ın içerik alanı (~1,17 em) 1'lik satır yüksekliğini aşar ve 20u'luk .zaman'dan ~1,7u taşmış
+   sayılırdı; rakam mürekkebi (~0,7 em) satırın içinde kalır, kırpılan yalnız görünmeyen içerik alanıdır.
+   flex-shrink: 0 — overflow esnek öğenin min-width'ini 0 yapar; saat daralıp saniyeleri sessizce kırpmasın,
+   taşma olursa .zaman'ın genişlik testine düşsün. */
+.ekran[data-duzen='yatay'] .saat { font-size: calc(var(--u) * 20); overflow: hidden; flex-shrink: 0; }
+/* Taban .ekran.saat-yok .saat ile aynı özgüllükteki yukarıdaki kural uyarıyı 20u'ya büyütürdü (~5 satır). flex-shrink: 1 — uyarı metni satıra bölünerek sığsın. */
+.ekran[data-duzen='yatay'].saat-yok .saat { font-size: calc(var(--u) * 5); line-height: 1.15; white-space: normal; flex-shrink: 1; }
+/* "Open-Meteo" sıcaklığın altına iner: saatin yanında en uzun değerde (−12 °C) de pay kalsın. */
+.ekran[data-duzen='yatay'] .hava { display: grid; grid-template-columns: auto auto; grid-template-areas: 'simge derece' 'simge kaynak'; align-items: center; line-height: 1.1; }
+.ekran[data-duzen='yatay'] .hava svg { grid-area: simge; width: calc(var(--u) * 6); height: calc(var(--u) * 6); margin-right: calc(var(--u) * 1.5); }
+.ekran[data-duzen='yatay'] .hava span { grid-area: derece; align-self: end; }
+.ekran[data-duzen='yatay'] .hava small { grid-area: kaynak; align-self: start; margin-left: 0; }
+.ekran[data-duzen='yatay'] .takvim { font-size: calc(var(--u) * 3.4); line-height: 1.25; }
+.ekran[data-duzen='yatay'] .takvim.fr { font-size: calc(var(--u) * 2.9); }
+
+.ekran[data-duzen='yatay'] .slayt-alani { grid-area: slayt; min-height: 0; padding: calc(var(--u) * 3.5) calc(var(--u) * 4); }
+
+/* Sol sütun: .vakitler (ve Cuma'daki .cumali) yüksekliği ızgara satırından gelir. */
+.ekran[data-duzen='yatay'] .vakitler { grid-area: vakit; height: auto; min-height: 0; border-top: 0; border-right: calc(var(--u) * .7) solid var(--ana); padding: calc(var(--u) * 2) 0; }
+.ekran[data-duzen='yatay'] .vakit { height: auto; flex: 1 1 0; min-height: 0; padding: 0 calc(var(--u) * 3.5); line-height: 1.15; }
+.ekran[data-duzen='yatay'] .vakit .ad b { font-size: calc(var(--u) * 5.5); }
+.ekran[data-duzen='yatay'] .vakit .ad i { font-size: calc(var(--u) * 3.8); }
+.ekran[data-duzen='yatay'] .vakit .deger { font-size: calc(var(--u) * 8.5); line-height: 1; }
+/* Sıradaki vakit: ad satırı, büyük saat ve geri sayım alt alta; kalan beş satır sütunun geri kalanını paylaşır. */
+.ekran[data-duzen='yatay'] .vakit.siradaki { flex: 0 0 auto; flex-direction: column; align-items: stretch; justify-content: center; padding: calc(var(--u) * 2.2) calc(var(--u) * 3.5); }
+.ekran[data-duzen='yatay'] .vakit.siradaki .ad b { font-size: calc(var(--u) * 7); }
+.ekran[data-duzen='yatay'] .vakit.siradaki .ad i { font-size: calc(var(--u) * 4.5); }
+.ekran[data-duzen='yatay'] .vakit.siradaki .deger { display: block; font-size: calc(var(--u) * 20); }
+.ekran[data-duzen='yatay'] .yarin { font-size: calc(var(--u) * 4); font-weight: 600; margin-left: calc(var(--u) * 2); }
+.ekran[data-duzen='yatay'] .yarin .fr::before { content: ' · '; }
+/* Vurgulu satır yoksa (veri boşluğu) boş geri sayım kutusu satırlardan pay almaz: altı satır eşit bölüşür. */
+.ekran[data-duzen='yatay'] .geri-sayim { flex: none; padding: 0; }
+.ekran[data-duzen='yatay'] .geri-sayim b { display: block; font-size: calc(var(--u) * 5); }
+.ekran[data-duzen='yatay'] .geri-sayim .fr { display: block; font-size: calc(var(--u) * 4); }
+/* Sabit Cuma saati sütunun altında TEK satır: «Cuma namazı 13:30 · Prière du vendredi 13:30» (~22 em). Satırlar
+   ~10u'ya iner; 8,5u'luk saatin içerik alanı (~10u) sığsın diye sütunun dikey dolgusu 2u'dan 1u'ya iner. */
+.ekran[data-duzen='yatay'] .vakitler.cumali { padding: calc(var(--u) * 1) 0; }
+.ekran[data-duzen='yatay'] .cuma-saati { display: block; flex: none; padding: calc(var(--u) * .8) calc(var(--u) * 3.5) 0; line-height: 1.15; white-space: nowrap; }
+.ekran[data-duzen='yatay'] .cuma-saati b { font-size: calc(var(--u) * 3.2); }
+.ekran[data-duzen='yatay'] .cuma-saati .fr { font-size: calc(var(--u) * 2.8); }
+.ekran[data-duzen='yatay'] .cuma-saati .fr::before { content: ' · '; }
+.ekran[data-duzen='yatay'] .vakit-yok b { font-size: calc(var(--u) * 6); line-height: 1.15; }
+.ekran[data-duzen='yatay'] .vakit-yok .fr { font-size: calc(var(--u) * 4.5); line-height: 1.15; }
+
+/* Açık kişisel kip: aynı kimlik, yazı yüzleri, OLCU ve çizici. Ekran boyu yazıyı küçültmez;
+   içerik doğal yüksekliğiyle kaydırılır. TV seçicileri/pikselleri bu kipten etkilenmez. */
+.sahne[data-kip='dokunmatik'] { overflow-y: auto; overflow-x: hidden; }
+.ekran[data-kip='dokunmatik'] { position: relative; width: 100%; min-height: 100%; overflow: visible; }
+.ekran[data-kip='dokunmatik'] .ust { height: auto; flex: none; padding: 24px 20px 20px; border-bottom-width: 2px; overflow: visible; }
+.ekran[data-kip='dokunmatik'] .kimlik { height: auto; }
+.ekran[data-kip='dokunmatik'] .logo { width: 48px; height: 48px; flex: none; margin-right: 12px; }
+.ekran[data-kip='dokunmatik'] .cami-adi { min-width: 0; overflow-wrap: break-word; }
+.ekran[data-kip='dokunmatik'] .cami-adi span:first-child { font-size: 1.25rem; line-height: 1.2; }
+.ekran[data-kip='dokunmatik'] .cami-adi .fr { font-size: 1rem; margin-top: 4px; }
+.ekran[data-kip='dokunmatik'] .zaman { height: auto; min-height: 88px; flex-wrap: wrap; margin-top: 12px; }
+.ekran[data-kip='dokunmatik'] .saat { font-size: var(--saat-boy); }
+.ekran[data-kip='dokunmatik'].saat-yok .saat { font-size: 1.5rem; }
+.ekran[data-kip='dokunmatik'] .hava { font-size: 1.25rem; margin: 8px 0; flex-wrap: wrap; max-width: 100%; }
+.ekran[data-kip='dokunmatik'] .hava svg { width: 32px; height: 32px; margin-right: 8px; }
+.ekran[data-kip='dokunmatik'] .hava small { font-size: 1rem; margin-left: 8px; opacity: 1; }
+.ekran[data-kip='dokunmatik'] .takvim { font-size: 1rem; white-space: normal; overflow: visible; }
+.ekran[data-kip='dokunmatik'] .takvim.fr { margin-top: 4px; }
+.ekran[data-kip='dokunmatik'] .fr { opacity: 1; }
+.dokunmatik-araclar { display: flex; flex-wrap: wrap; padding: 12px 14px; border-bottom: 1px solid var(--ana); }
+.dokunmatik-araclar button { flex: 1 1 130px; min-width: 48px; min-height: 48px; margin: 6px; padding: 10px 12px; border: 1px solid var(--ana); border-radius: 4px; font: inherit; font-size: 1rem; line-height: 1.35; color: inherit; background: transparent; cursor: pointer; overflow-wrap: break-word; word-wrap: break-word; }
+.dokunmatik-araclar button span { display: block; font-size: 1rem; }
+.dokunmatik-araclar button[aria-pressed='true'], .dokunmatik-araclar button:active { color: var(--beyaz); background: var(--ana); }
+.dokunmatik-araclar button:focus { outline: 3px solid currentColor; outline-offset: 2px; }
+.ekran[data-kip='dokunmatik'] .vakitler { height: auto; flex: none; border-top: 0; padding: 12px 0 20px; }
+.ekran[data-kip='dokunmatik'] .vakit { height: auto; min-height: 64px; flex: none; padding: 12px 20px; }
+.ekran[data-kip='dokunmatik'] .vakit .ad { min-width: 0; padding-right: 12px; overflow-wrap: break-word; }
+.ekran[data-kip='dokunmatik'] .vakit .ad b { font-size: calc(var(--u) * 3.4); }
+.ekran[data-kip='dokunmatik'] .vakit .ad i { font-size: calc(var(--u) * 2.9); display: block; margin-left: 0; }
+.ekran[data-kip='dokunmatik'] .vakit .deger { font-size: calc(var(--u) * 4.4); flex: none; }
+.ekran[data-kip='dokunmatik'] .geri-sayim { flex: none; padding: 16px 20px 0; }
+.ekran[data-kip='dokunmatik'] .geri-sayim b { font-size: calc(var(--u) * 3.4); }
+.ekran[data-kip='dokunmatik'] .geri-sayim .fr { font-size: calc(var(--u) * 2.9); }
+.ekran[data-kip='dokunmatik'] .cuma-saati { height: auto; white-space: normal; padding: 16px 20px 0; }
+.ekran[data-kip='dokunmatik'] .cuma-saati b, .ekran[data-kip='dokunmatik'] .cuma-saati .fr { font-size: calc(var(--u) * 2.9); }
+.ekran[data-kip='dokunmatik'] .vakit-yok { padding: 20px; }
+.ekran[data-kip='dokunmatik'] .vakit-yok b, .ekran[data-kip='dokunmatik'] .vakit-yok .fr { max-width: 100%; overflow-wrap: break-word; }
+.ekran[data-kip='dokunmatik'] .vakit-yok b { font-size: calc(var(--u) * 3.4); }
+.ekran[data-kip='dokunmatik'] .vakit-yok .fr { font-size: calc(var(--u) * 2.9); }
+.ekran[data-kip='dokunmatik'] .slayt-alani { flex: none; height: auto; overflow: visible; padding: 28px 20px 36px; }
+.ekran[data-kip='dokunmatik'] .slayt { height: auto; min-height: 0; }
+.ekran[data-kip='dokunmatik'] .levha { margin: 12px 0 0; }
+.ekran[data-kip='dokunmatik'] .ust-baslik { letter-spacing: .04em; color: inherit; }
+.ekran[data-kip='dokunmatik'] .kaynak .bolunmez { white-space: normal; }
+.ekran[data-kip='dokunmatik'] .susleme { max-width: 100%; }
+.ekran[data-kip='dokunmatik'] .afisli { display: block; flex: none; min-height: 0; }
+.ekran[data-kip='dokunmatik'] .afis { height: auto; margin: 0 auto 24px; max-width: 420px; }
+.ekran[data-kip='dokunmatik'] .afis img { display: block; width: 100%; height: auto; }
+.ekran[data-kip='dokunmatik'] .bos b { font-size: calc(var(--u) * 4.4); }
+.ekran[data-kip='dokunmatik'] .bos .fr { font-size: calc(var(--u) * 2.9); }
+/* Gerçek pencere ölçüleri; model veya yön varsayılmaz. */
+.ekran[data-kip='dokunmatik'][data-pencere='medium'] .vakitler { display: grid; grid-template-columns: 1fr 1fr; }
+.ekran[data-kip='dokunmatik'][data-pencere='medium'] .geri-sayim,
+.ekran[data-kip='dokunmatik'][data-pencere='medium'] .cuma-saati,
+.ekran[data-kip='dokunmatik'][data-pencere='medium'] .vakit-yok { grid-column: 1 / -1; }
+.ekran[data-kip='dokunmatik'][data-pencere='expanded'] { display: grid; grid-template-columns: 35% 65%; grid-template-rows: auto auto 1fr; grid-template-areas: 'ust ust' 'arac arac' 'vakit slayt'; align-items: start; }
+.ekran[data-kip='dokunmatik'][data-pencere='expanded'] .ust { grid-area: ust; }
+.ekran[data-kip='dokunmatik'][data-pencere='expanded'] .dokunmatik-araclar { grid-area: arac; }
+.ekran[data-kip='dokunmatik'][data-pencere='expanded'] .vakitler { grid-area: vakit; }
+.ekran[data-kip='dokunmatik'][data-pencere='expanded'] .slayt-alani { grid-area: slayt; min-width: 0; }
+.ekran[data-kip='dokunmatik'][data-kisa='evet'] .ust { padding-top: 16px; }
+.ekran[data-kip='dokunmatik'][data-buyuk='evet'] .vakitler { display: flex; }
+.ekran[data-kip='dokunmatik'][data-buyuk='evet'][data-pencere='expanded'] { display: flex; }
+@media (prefers-reduced-motion: reduce) { .ekran[data-kip='dokunmatik'] { transition: none; } }
